@@ -1,0 +1,7 @@
+/target
+**/*.rs.bk
+*.apk
+*.keystore
+
+# built by `make web`
+web/ascendio.wasm

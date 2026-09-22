@@ -1,0 +1,29 @@
+[package]
+name = "ascendio"
+version = "0.1.0"
+edition = "2021"
+description = "Incremental game: unlock the phylogenomic tree of animal life, one tap at a time."
+license = "MIT"
+
+[dependencies]
+macroquad = "0.4"
+
+# Small, fast binaries matter on Android.
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[profile.dev]
+opt-level = 1
+
+# Used by `cargo quad-apk` / the notfl3/cargo-apk docker image.
+[package.metadata.android]
+package_name = "com.ascendio.game"
+label = "Ascendio"
+target_sdk_version = 34
+min_sdk_version = 24
+fullscreen = true
+orientation = "portrait"

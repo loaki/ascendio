@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<!-- user-scalable=no keeps the browser's own pinch-zoom from eating the
+     game's pinch gesture; viewport-fit=cover handles notches. -->
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#0E1116">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Ascendio</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100vh;
+    height: 100dvh;
+    overflow: hidden;
+    background: #0E1116;
+    /* Stop the browser treating game drags as page scroll / pull-to-refresh. */
+    overscroll-behavior: none;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  #glcanvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+    /* Without this the browser keeps the touch events for itself. */
+    touch-action: none;
+    outline: none;
+  }
+</style>
+</head>
+<body>
+  <!-- gl.js looks this up by id as soon as it loads, so it must come first. -->
+  <canvas id="glcanvas" tabindex="1" oncontextmenu="return false;"></canvas>
+  <script src="gl.js"></script>
+  <script>load("ascendio.wasm");</script>
+</body>
+</html>
