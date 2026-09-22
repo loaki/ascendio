@@ -31,6 +31,8 @@ const ACCENT_DNA: Color = rgb(0x5BC8F5);
 const ACCENT_WARN: Color = rgb(0xE8A33D);
 const ACCENT_CAP: Color = rgb(0x9B7EDE);
 const ACCENT_STORAGE: Color = rgb(0x4FD1C5);
+const ACCENT_TAP: Color = rgb(0xE85EA0);
+const ACCENT_VIGOR: Color = rgb(0xF0C34D);
 const TRACK: Color = rgb(0x20272F);
 /// Multiply tint for an undiscovered species' sprite: dark enough to read as
 /// a silhouette tease, not a preview of its real colours.
@@ -69,28 +71,46 @@ fn faded(c: Color, a: f32) -> Color {
 
 // --- text -------------------------------------------------------------------
 
+/// Beyond the largest named unit (`Qa`, 10^15), there is no more suffix to
+/// promote into -- rather than ever print an untiered "1234Qa", fall back to
+/// plain scientific notation, which has no ceiling. Flat, additive upgrades
+/// (see `upgrades.rs`) keep every number here comfortably small in practice,
+/// but nothing bounds a long-enough idle session or a very leveled species,
+/// so every huge-number path needs a real answer, not a wrong-looking one.
+fn scientific(v: f64) -> String {
+    if v == 0.0 || !v.is_finite() {
+        return format!("{v:.0}");
+    }
+    let exp = v.abs().log10().floor() as i32;
+    let mantissa = v / 10f64.powi(exp);
+    format!("{mantissa:.2}e{exp}")
+}
+
 /// Compact number for the HUD: 940, 1.24K, 87.3M.
 /// For a rate (DNA/s): keeps two decimals below 1 so an early "0.20/s"
 /// doesn't just read as a flat, alarming "0".
 pub fn compact(v: f64) -> String {
     const UNITS: [&str; 6] = ["", "K", "M", "B", "T", "Qa"];
-    let (mut v, mut unit) = (v, 0);
-    while v >= 1000.0 && unit < UNITS.len() - 1 {
-        v /= 1000.0;
+    let (mut scaled, mut unit) = (v, 0);
+    while scaled >= 1000.0 && unit < UNITS.len() - 1 {
+        scaled /= 1000.0;
         unit += 1;
     }
+    if unit == UNITS.len() - 1 && scaled >= 1000.0 {
+        return scientific(v);
+    }
     if unit == 0 {
-        if v < 1.0 {
-            format!("{v:.2}")
+        if scaled < 1.0 {
+            format!("{scaled:.2}")
         } else {
-            format!("{v:.1}").trim_end_matches(".0").to_string()
+            format!("{scaled:.1}").trim_end_matches(".0").to_string()
         }
-    } else if v < 10.0 {
-        format!("{v:.2}{}", UNITS[unit])
-    } else if v < 100.0 {
-        format!("{v:.1}{}", UNITS[unit])
+    } else if scaled < 10.0 {
+        format!("{scaled:.2}{}", UNITS[unit])
+    } else if scaled < 100.0 {
+        format!("{scaled:.1}{}", UNITS[unit])
     } else {
-        format!("{v:.0}{}", UNITS[unit])
+        format!("{scaled:.0}{}", UNITS[unit])
     }
 }
 
@@ -98,15 +118,19 @@ pub fn compact(v: f64) -> String {
 /// numbers only, never a decimal point, however small the value.
 pub fn compact_int(v: f64) -> String {
     const UNITS: [&str; 6] = ["", "K", "M", "B", "T", "Qa"];
-    let mut v = v.max(0.0);
+    let orig = v.max(0.0);
+    let mut scaled = orig;
     let mut unit = 0;
     // The 999.5 threshold (not 1000) promotes a value that would round up to
     // the next tier before it does, so "1000" never appears untiered.
-    while v >= 999.5 && unit < UNITS.len() - 1 {
-        v /= 1000.0;
+    while scaled >= 999.5 && unit < UNITS.len() - 1 {
+        scaled /= 1000.0;
         unit += 1;
     }
-    format!("{:.0}{}", v.round(), UNITS[unit])
+    if unit == UNITS.len() - 1 && scaled >= 999.5 {
+        return scientific(orig);
+    }
+    format!("{:.0}{}", scaled.round(), UNITS[unit])
 }
 
 /// Width of `s` when drawn at `px`, in the same units as `px`.
@@ -147,10 +171,11 @@ pub fn draw_spiral(
     last: f32,
     sprites: &Sprites,
     evolve_anim: f32,
+    fact: Option<&str>,
 ) {
     clear_background(BG);
     draw_coil(frame, t, last);
-    draw_spurs(game, frame);
+    draw_spurs(game, frame, sprites);
 
     // Far to near, so the focus bead lands on top.
     let mut beads: Vec<&Bead> = frame.beads.iter().collect();
@@ -159,8 +184,12 @@ pub fn draw_spiral(
         draw_bead(game, frame, bead, sprites);
     }
 
-    draw_focus_card(game, frame, sprites, evolve_anim);
-    draw_hud(game, "MAP", spiral::toast_y());
+    draw_hud(game, "MAP");
+    if let Some(f) = fact {
+        draw_fact_panel(f);
+    }
+    // Drawn last, right above the bottom bar it now sits next to.
+    draw_focus_card(game, frame.focus, frame.card, sprites, evolve_anim);
     draw_bottom_bar(game, None);
 }
 
@@ -174,12 +203,22 @@ fn draw_coil(frame: &Frame, t: f32, last: f32) {
     }
 }
 
+/// The accent colour for any rectangle that represents `taxon` -- the card,
+/// a map node, a spiral chip/bead, all of it. A discovered species is
+/// tinted with the colour of whatever kind its nearest resolved category
+/// ancestor gives it (`kind_color`), not its clade colour any more, so the
+/// colour alone shows what it's powering. A category, or anything still
+/// locked, keeps the clade colour it always had.
 fn accent_of(game: &Game, taxon: usize) -> Color {
-    if game.unlocked[taxon] {
-        group_color(game.taxon(taxon).group)
-    } else {
-        LOCKED_BORDER
+    if !game.unlocked[taxon] {
+        return LOCKED_BORDER;
     }
+    if game.taxon(taxon).group != Group::Backbone {
+        if let Some(kind) = game.nearest_category_kind(taxon) {
+            return kind_color(kind);
+        }
+    }
+    group_color(game.taxon(taxon).group)
 }
 
 /// A label box on the coil. Callers own the geometry; this just paints it.
@@ -192,7 +231,12 @@ struct Chip<'a> {
     unlocked: bool,
     fade: f32,
     border: f32,
+    taxon: usize,
 }
+
+/// The chip icon's diameter as a fraction of the box height -- must match
+/// the `* 1.3` reservation in `spiral::Frame::build`'s `chip` closure.
+const CHIP_ICON: f32 = 0.72;
 
 /// A horizontal fill bar, for the DNA pool and for mutation pressure.
 fn draw_meter(x: f32, y: f32, w: f32, h: f32, fraction: f32, fill: Color) {
@@ -203,7 +247,7 @@ fn draw_meter(x: f32, y: f32, w: f32, h: f32, fraction: f32, fill: Color) {
     }
 }
 
-fn draw_chip(c: Chip) {
+fn draw_chip(game: &Game, sprites: &Sprites, c: Chip) {
     let (x, y) = (c.pos.x - c.half.x, c.pos.y - c.half.y);
     let (w, h) = (c.half.x * 2.0, c.half.y * 2.0);
     draw_rectangle(
@@ -214,17 +258,29 @@ fn draw_chip(c: Chip) {
         faded(if c.unlocked { PANEL } else { PANEL_LOCKED }, c.fade),
     );
     draw_rectangle_lines(x, y, w, h, c.border, faded(c.accent, c.fade));
-    text_centered(
+
+    // A small icon to the left, same convention as the map and focus card --
+    // locked chips get the same dark silhouette tease.
+    let icon = h * CHIP_ICON;
+    let icon_center = Vec2::new(x + h * 0.14 + icon * 0.5, c.pos.y);
+    let group = game.taxon(c.taxon).group;
+    let anim = sprites::pose(group, c.taxon, get_time());
+    let tint = faded(if c.unlocked { WHITE } else { SILHOUETTE }, c.fade);
+    sprites::draw_sprite(sprites.get(c.taxon), icon_center, icon, anim, tint);
+
+    let text_x0 = x + h * 0.14 + icon + h * 0.10;
+    let text_w = (x + w - h * 0.12 - text_x0).max(1.0);
+    text(
         c.label,
-        c.pos.x,
+        text_x0,
         c.pos.y + c.px * 0.34,
-        c.px,
+        fit_px(c.label, text_w, c.px),
         faded(if c.unlocked { TEXT } else { LOCKED_TEXT }, c.fade),
     );
 }
 
 /// The branches leaving the lineage. These are what make the coil a tree.
-fn draw_spurs(game: &Game, frame: &Frame) {
+fn draw_spurs(game: &Game, frame: &Frame, sprites: &Sprites) {
     let px = spiral::label_px(frame.k);
 
     for spur in &frame.spurs {
@@ -241,16 +297,21 @@ fn draw_spurs(game: &Game, frame: &Frame) {
         );
 
         match &spur.label {
-            Some(label) => draw_chip(Chip {
-                pos: spur.pos,
-                half: spur.half,
-                label,
-                px: px * spiral::scale_at(spur.d) * 0.92,
-                accent,
-                unlocked: game.unlocked[spur.taxon],
-                fade,
-                border: 1.5,
-            }),
+            Some(label) => draw_chip(
+                game,
+                sprites,
+                Chip {
+                    pos: spur.pos,
+                    half: spur.half,
+                    label,
+                    px: px * spiral::scale_at(spur.d) * 0.92,
+                    accent,
+                    unlocked: game.unlocked[spur.taxon],
+                    fade,
+                    border: 1.5,
+                    taxon: spur.taxon,
+                },
+            ),
             None => {
                 let r = spiral::bead_radius(frame.k, spiral::scale_at(spur.d) * 0.7);
                 draw_circle(spur.pos.x, spur.pos.y, r, faded(accent, fade * 0.7));
@@ -286,16 +347,21 @@ fn draw_bead(game: &Game, frame: &Frame, bead: &Bead, sprites: &Sprites) {
         return;
     };
 
-    draw_chip(Chip {
-        pos: bead.pos,
-        half: bead.half,
-        label,
-        px: spiral::label_px(frame.k) * bead.scale,
-        accent,
-        unlocked: game.unlocked[bead.taxon],
-        fade,
-        border: if is_focus { 3.0 } else { 1.5 },
-    });
+    draw_chip(
+        game,
+        sprites,
+        Chip {
+            pos: bead.pos,
+            half: bead.half,
+            label,
+            px: spiral::label_px(frame.k) * bead.scale,
+            accent,
+            unlocked: game.unlocked[bead.taxon],
+            fade,
+            border: if is_focus { 3.0 } else { 1.5 },
+            taxon: bead.taxon,
+        },
+    );
 }
 
 /// Shrinks `px` until `s` fits in `max_w`.
@@ -308,9 +374,33 @@ fn fit_px(s: &str, max_w: f32, px: f32) -> f32 {
     }
 }
 
-fn draw_focus_card(game: &Game, frame: &Frame, sprites: &Sprites, evolve_anim: f32) {
-    let c = frame.card;
-    let taxon = frame.focus;
+/// What a taxon's meta row shows on the right -- a species gives whatever
+/// bonus its nearest category kind is (`Game::species_bonus`), not DNA/s
+/// unconditionally any more. A category (or, in principle, a species with no
+/// resolved ancestor kind) falls through to the old "+DNA/s" shape, which is
+/// always 0 for a category -- categories never produced DNA either way.
+fn species_earn_label(game: &Game, taxon: usize) -> String {
+    match game.species_bonus(taxon) {
+        Some((Kind::Rate, amount)) => format!("+{}/s", compact(amount)),
+        Some((Kind::Cost, amount)) => format!("-{} cost", compact(amount)),
+        Some((Kind::Chance, amount)) => format!("+{:.0}% chance", amount * 100.0),
+        Some((Kind::Cap, amount)) => format!("+{} cap", compact(amount)),
+        Some((Kind::Tap, amount)) => format!("+{} tap", compact(amount)),
+        Some((Kind::Storage, amount)) => format!("+{} overflow", compact(amount)),
+        Some((Kind::Vigor, amount)) => {
+            let n = amount.round() as u32;
+            format!("+{n} start lvl{}", if n == 1 { "" } else { "s" })
+        }
+        None => format!("+{}/s", compact(game.output(taxon))),
+    }
+}
+
+/// Draws the species/category info card at `card`, for `taxon`. Used both
+/// for the spiral's focus (where `evolve_anim` punches it on a fresh
+/// Evolve) and the map's tap-to-inspect overlay (where nothing evolved this
+/// specific taxon, so `evolve_anim` is always 0 there).
+fn draw_focus_card(game: &Game, taxon: usize, card: Rect, sprites: &Sprites, evolve_anim: f32) {
+    let c = card;
     let unlocked = game.unlocked[taxon];
     let accent = accent_of(game, taxon);
     let pulse = game.pulse[taxon];
@@ -390,71 +480,126 @@ fn draw_focus_card(game: &Game, frame: &Frame, sprites: &Sprites, evolve_anim: f
         fit_px(taxon_ref.clade, inner, c.h * 0.085),
         accent,
     );
-
     // Level on the left, what it earns on the right, its age between them.
+    // A category has no level of its own worth showing here -- its own
+    // progression is the upgrade shop's level, not this one (see
+    // `Game::upgrade_level`), and showing both would just read as two
+    // different numbers competing for the same word.
     let meta_px = c.h * 0.08;
     let pad = c.h * 0.14;
     let meta_y = c.y + c.h * 0.80;
-    text(
-        &format!("Lv {}", game.level[taxon]),
-        c.x + pad,
-        meta_y,
-        meta_px,
-        TEXT,
-    );
+    if taxon_ref.group != Group::Backbone {
+        text(
+            &format!("Lv {}", game.level[taxon]),
+            c.x + pad,
+            meta_y,
+            meta_px,
+            TEXT,
+        );
+    }
     text_centered(&taxon_ref.age_label(), cx, meta_y, meta_px, TEXT_DIM);
-    let earns = format!("+{}/s", compact(game.output(taxon)));
+    // What this taxon actually gives -- a species no longer means DNA/s
+    // unconditionally, it means whatever its nearest category's kind is.
+    let earns = species_earn_label(game, taxon);
+    let earns_px = fit_px(&earns, inner * 0.42, meta_px);
     text(
         &earns,
-        c.x + c.w - pad - text_width(&earns, meta_px),
+        c.x + c.w - pad - text_width(&earns, earns_px),
         meta_y,
-        meta_px,
-        ACCENT_DNA,
+        earns_px,
+        accent,
     );
 
-    if taxon_ref.children.is_empty() {
-        text_centered(
-            "LINEAGE COMPLETE",
-            cx,
-            c.y + c.h * 0.935,
-            c.h * 0.075,
-            TEXT_DIM,
-        );
+    // A category's card stops here: its payoff is the choice it already
+    // made on discovery, not a per-roll percentage -- that reads as a
+    // distraction, not useful information, once the choice is resolved.
+    if taxon_ref.group == Group::Backbone {
+        if taxon_ref.children.is_empty() {
+            text_centered(
+                "LINEAGE COMPLETE",
+                cx,
+                c.y + c.h * 0.935,
+                c.h * 0.075,
+                TEXT_DIM,
+            );
+        }
         return;
     }
 
-    // Mutation pressure, and how much of the odds a full pool's spend bonus
-    // already buys. Both feed the same number Evolve rolls against, so one
-    // bar previews the whole picture whether or not the pool is full yet.
+    // A species keeps the advanced-find odds preview it always had, if
+    // there is still a branch under it to roll on -- Evolve always
+    // discovers *something* from here now, this is only about how much
+    // further it might reach in the same roll (see `Game::evolve`).
+    if !taxon_ref.children.is_empty() {
+        draw_meter(
+            c.x + pad,
+            c.y + c.h * 0.855,
+            c.w - pad * 2.0,
+            c.h * 0.03,
+            game.pressure_fraction(taxon),
+            ACCENT_WARN,
+        );
+        let caption = format!(
+            "{:.0}% chance of a more advanced find",
+            game.unlock_chance(taxon) * 100.0
+        );
+        text_centered(
+            &caption,
+            cx,
+            c.y + c.h * 0.905,
+            fit_px(&caption, inner, c.h * 0.06),
+            TEXT_DIM,
+        );
+    }
+
+    // ...and, either way, its own tap-level bar: tapping the card fills it
+    // (`Game::tap_level`), and it levels up once full -- a direct, always-
+    // available channel independent of the Evolve gate, so a leaf species
+    // with nothing left to discover still has something to do here. The
+    // hint sits right on top of the bar it explains, not up near the name.
+    let hint = "tap to level up";
+    text_centered(
+        hint,
+        cx,
+        c.y + c.h * 0.925,
+        fit_px(hint, inner, c.h * 0.05),
+        TEXT_DIM,
+    );
     draw_meter(
         c.x + pad,
-        c.y + c.h * 0.865,
+        c.y + c.h * 0.945,
         c.w - pad * 2.0,
         c.h * 0.035,
-        game.pressure_fraction(taxon),
-        ACCENT_WARN,
+        game.tap_progress_fraction(taxon),
+        accent,
     );
-
-    // Informational, not a button: the Evolve action itself lives in the
-    // bottom bar now, and can land on any eligible taxon, not just this one.
-    // This previews specifically what a roll on *this* lineage would do if
-    // Evolve happens to pick it.
-    let caption = format!("{:.0}% odds if picked", game.unlock_chance(taxon) * 100.0);
-    let caption_px = fit_px(&caption, inner, c.h * 0.07);
-    text_centered(&caption, cx, c.y + c.h * 0.965, caption_px, TEXT_DIM);
 }
 
 // --- map view ---------------------------------------------------------------
 
-pub fn draw_map(game: &Game, layout: &Layout, cam: &Camera, sprites: &Sprites, fact: &str) {
+pub fn draw_map(
+    game: &Game,
+    layout: &Layout,
+    cam: &Camera,
+    sprites: &Sprites,
+    fact: Option<&str>,
+    card_focus: Option<usize>,
+) {
     clear_background(BG);
     draw_edges(game, layout, cam);
     draw_nodes(game, layout, cam, sprites);
-    draw_hud(game, "TREE", screen_height() - bar_height() * 1.9);
-    // Map-only: the one screen you are most likely to be idly browsing on.
-    // Skipped while a toast is up so the two never compete for attention.
-    if game.toast.is_none() {
-        draw_fact_panel(fact);
+    draw_hud(game, "SPIRAL");
+    if let Some(f) = fact {
+        draw_fact_panel(f);
+    }
+    // Tapping a node shows its card right here rather than jumping to the
+    // spiral -- nothing evolved this specific taxon just by looking at it,
+    // so unlike the spiral's own card, this one never punches on an Evolve.
+    // `main` keeps `card_focus` in sync with whatever just evolved, so
+    // looking at the map when Evolve fires shows what happened here too.
+    // Drawn last, right above the bottom bar it now sits next to.
+    if let Some(taxon) = card_focus {
+        draw_focus_card(game, taxon, spiral::card_rect(), sprites, 0.0);
     }
     draw_bottom_bar(game, None);
 }
@@ -496,7 +641,7 @@ fn draw_nodes(game: &Game, layout: &Layout, cam: &Camera, sprites: &Sprites) {
             continue;
         }
 
-        let accent = group_color(game.taxon(i).group);
+        let accent = accent_of(game, i);
 
         if game.unlocked[i] {
             draw_rectangle(x, y, w, h, PANEL);
@@ -554,14 +699,21 @@ fn draw_nodes(game: &Game, layout: &Layout, cam: &Camera, sprites: &Sprites) {
     }
 }
 
-/// `"740 Ma"`, or `"740 Ma  32%"` while the lineage still has something to give.
+/// `"740 Ma"`, or `"740 Ma  32%"` while the lineage still has something to
+/// give, prefixed with `"Lv N  ·  "` for a species -- a category leaves its
+/// own level off here too, same as the focus card (see `draw_focus_card`).
 fn sublabel(game: &Game, i: usize) -> String {
     let age = game.taxon(i).age_label();
     let has_locked_kids = game.taxon(i).children.iter().any(|&c| !game.unlocked[c]);
-    if has_locked_kids {
+    let base = if has_locked_kids {
         format!("{age}  {:.0}%", game.unlock_chance(i) * 100.0)
     } else {
         age
+    };
+    if game.taxon(i).group == Group::Backbone {
+        base
+    } else {
+        format!("Lv {}  ·  {base}", game.level[i])
     }
 }
 
@@ -580,7 +732,7 @@ pub fn bar_height() -> f32 {
     (screen_height() * 0.085).clamp(56.0, 92.0)
 }
 
-fn draw_hud(game: &Game, button_label: &str, toast_y: f32) {
+fn draw_hud(game: &Game, button_label: &str) {
     let sw = screen_width();
     let bar_h = bar_height();
     let px = bar_h * 0.34;
@@ -588,7 +740,10 @@ fn draw_hud(game: &Game, button_label: &str, toast_y: f32) {
     draw_rectangle(0.0, 0.0, sw, bar_h, HUD_BG);
     draw_line(0.0, bar_h, sw, bar_h, 1.0, EDGE);
 
-    // Line 1: the pool. The whole session is about spending this.
+    // Line 1: the pool. The whole session is about spending this. A
+    // `Storage` upgrade can push `dna` past `pool_cap` (see
+    // `Game::overflow_cap`) -- that shows up right here as the first number
+    // outgrowing the second, no separate badge needed.
     let pool = format!(
         "{} / {} DNA",
         compact_int(game.dna),
@@ -618,39 +773,33 @@ fn draw_hud(game: &Game, button_label: &str, toast_y: f32) {
         px * 0.85,
         TEXT,
     );
-
-    if let Some(toast) = &game.toast {
-        let alpha = (toast.remaining / 0.6).min(1.0);
-        let label = format!("EVOLVED   {}", toast.text);
-        let tp = fit_px(&label, sw * 0.80, px * 1.05);
-        let w = text_width(&label, tp);
-        let y = toast_y;
-        let (bx, by, bw, bh) = (
-            sw * 0.5 - w * 0.5 - tp,
-            y - tp * 1.1,
-            w + tp * 2.0,
-            tp * 2.2,
-        );
-        draw_rectangle(bx, by, bw, bh, faded(PANEL, 0.92 * alpha));
-        draw_rectangle_lines(bx, by, bw, bh, 2.0, faded(ACCENT_OK, alpha));
-        text_centered(&label, sw * 0.5, y + tp * 0.35, tp, faded(TEXT, alpha));
-    }
 }
 
-// --- "did you know" panel (map view only) -----------------------------------
+// --- "did you know" panel (spiral + map, while charging) ---------------------
 //
-// Lives only on the map: that is the screen you are most likely to be idly
-// browsing rather than actively doing something, and giving it its own
-// fixed home (rather than squeezing into the toast's slot on every screen)
-// is what lets it be genuinely bigger. It changes only when tapped -- no
-// timer -- so it can never compete with reading at your own pace.
+// A companion for the wait, not a permanent fixture: it only shows while the
+// pool is charging (there is nothing else to do until Evolve is ready), on
+// both of the screens you'd actually be browsing on -- not the upgrades tab,
+// which already has its own list to read. Sits right under the top bar, out
+// of the way of the coil/card below it -- see `spiral::card_rect`, which
+// lives at the opposite (bottom) end of the screen now. A tap dismisses it
+// outright rather than cycling through facts; the next charge cycle picks a
+// fresh one.
 
 /// Screen-space rect of the fact panel. The one source of truth for both
 /// drawing it and hit-testing a tap on it.
 pub fn fact_panel_rect() -> Rect {
     let sw = screen_width();
     let h = (screen_height() * 0.13).clamp(100.0, 190.0);
-    Rect::new(sw * 0.06, bar_height() + 14.0, sw * 0.88, h)
+    Rect::new(sw * 0.06, bar_height() + 10.0, sw * 0.88, h)
+}
+
+/// Whether there is anything for the fact panel to show right now: only
+/// while the pool is still charging -- once Evolve is ready, that is what
+/// deserves the attention instead. `main` combines this with whether the
+/// player already dismissed this charge cycle's fact.
+pub fn should_show_fact(game: &Game) -> bool {
+    !game.can_evolve()
 }
 
 /// The size of the top bar's "+X/s · Y/Z species" line -- the fact panel's
@@ -729,7 +878,7 @@ fn draw_fact_panel(fact: &str) {
 
     let hint_px = (label_px * 0.62).max(11.0);
     text_centered(
-        "tap for another",
+        "tap to dismiss",
         r.x + r.w * 0.5,
         r.y + r.h - hint_px * 0.7,
         hint_px,
@@ -807,10 +956,11 @@ fn draw_bottom_bar(game: &Game, active: Option<usize>) {
 
     // Evolve: the one action the whole session is paced around, so it gets
     // the centre slot and a state that reads at a glance -- a percentage
-    // while charging, the word itself the moment it means something.
+    // while charging, the word itself the moment it means something. How
+    // many charges that covers lives next to the DNA total in the HUD
+    // instead (see `draw_hud`), not crowded onto this button.
     let e = bottom_evolve_rect();
     let ready = game.can_evolve();
-    let banked = game.banked_evolves;
     let (ey, eh) = (e.y + 4.0, e.h - 8.0);
     draw_rectangle(
         e.x,
@@ -827,14 +977,10 @@ fn draw_bottom_bar(game: &Game, active: Option<usize>) {
         2.0,
         if ready { ACCENT_OK } else { TEXT_DIM },
     );
-    // A banked charge (the Amniote upgrade) is spendable even short of a
-    // full pool -- and stacks with one, if both happen to be true at once --
-    // so the label counts every Evolve on tap, not just whether it is lit.
-    let uses = banked + if game.pool_full() { 1 } else { 0 };
-    let label = match uses {
-        0 => format!("{:.0}%", game.pool_fraction() * 100.0),
-        1 => "EVOLVE".to_string(),
-        n => format!("EVOLVE x{n}"),
+    let label = if ready {
+        "EVOLVE".to_string()
+    } else {
+        format!("{:.0}%", game.pool_fraction() * 100.0)
     };
     text_centered(
         &label,
@@ -867,68 +1013,75 @@ fn kind_color(kind: Kind) -> Color {
         Kind::Chance => ACCENT_WARN,
         Kind::Cap => ACCENT_CAP,
         Kind::Storage => ACCENT_STORAGE,
+        Kind::Tap => ACCENT_TAP,
+        Kind::Vigor => ACCENT_VIGOR,
     }
 }
 
-/// This upgrade's own contribution at its current level -- not the game's
-/// combined total, just this one row's effect, for the number printed on it.
-/// `Storage` doesn't fit the percentage shape the others do (see
-/// `Kind::per_level`'s doc), so its row is built separately in
-/// `draw_upgrade_row` rather than through this.
-fn kind_effect_pct(kind: Kind, level: u32) -> f64 {
+/// `kind`'s own total contribution at level `lv` -- not the game's combined
+/// total, just this one row's effect, for the number printed on it. Every
+/// kind is flat and linear in its level (see `upgrades.rs`), so this is
+/// nothing more than `per_level × lv`; kept as its own function only so the
+/// row-drawing code doesn't repeat the multiplication inline.
+fn kind_effect_amount(kind: Kind, lv: u32) -> f64 {
+    kind.per_level() * lv as f64
+}
+
+/// `kind`'s effect amount, formatted in that kind's own natural unit --
+/// `Chance` in percentage points, `Vigor` in whole levels, everything else
+/// as a plain (possibly huge) DNA-flavoured number via `compact`.
+fn kind_effect_label(kind: Kind, amount: f64) -> String {
     match kind {
-        Kind::Chance => kind.per_level() * level as f64,
-        Kind::Storage => 0.0,
-        _ => (1.0 + kind.per_level()).powi(level as i32) - 1.0,
+        Kind::Rate => format!("+{}/s DNA", compact(amount)),
+        Kind::Cost => format!("-{} cost", compact(amount)),
+        Kind::Chance => format!("+{:.0}% chance", amount * 100.0),
+        Kind::Cap => format!("+{} cap", compact(amount)),
+        Kind::Storage => format!("+{} overflow", compact(amount)),
+        Kind::Tap => format!("+{} tap fill", compact(amount)),
+        Kind::Vigor => {
+            let n = amount.round() as u32;
+            format!("+{n} start level{}", if n == 1 { "" } else { "s" })
+        }
     }
 }
 
 /// Total scrollable content height, so `main` can clamp the scroll offset
 /// without needing to draw anything first.
 pub fn upgrades_content_height() -> f32 {
-    UPGRADE_LIST_TOP_PAD + upgrades::UPGRADES.len() as f32 * UPGRADE_ROW_H
+    UPGRADE_LIST_TOP_PAD + upgrades::NUM_KINDS as f32 * UPGRADE_ROW_H
 }
 
-pub fn draw_upgrades(game: &Game, sprites: &Sprites, scroll: f32) {
+pub fn draw_upgrades(game: &Game, scroll: f32) {
     clear_background(BG);
 
     let top = bar_height();
     let bottom = screen_height() - bar_height();
     let sw = screen_width();
 
-    let rows = upgrades::rows(&game.phy);
-    let unlocked_n = rows.iter().filter(|&&(t, _)| game.unlocked[t]).count();
+    let unlocked_n = upgrades::ALL_KINDS
+        .iter()
+        .filter(|&&k| game.kind_level(k) > 0)
+        .count();
     text(
-        &format!("UPGRADES   {unlocked_n} / {} unlocked", rows.len()),
+        &format!("UPGRADES   {unlocked_n} / {} unlocked", upgrades::NUM_KINDS),
         sw * 0.06,
         top + UPGRADE_LIST_TOP_PAD * 0.42,
         UPGRADE_LIST_TOP_PAD * 0.30,
         TEXT,
     );
 
-    // What all of them add up to right now -- only the categories that have
-    // at least one unlocked upgrade in them, so this stays short early on.
-    let e = game.effects();
-    let mut parts = Vec::new();
-    if e.rate_mul > 1.001 {
-        parts.push(format!("DNA x{:.2}", e.rate_mul));
-    }
-    if e.cost_mul < 0.999 {
-        parts.push(format!("cost x{:.2}", e.cost_mul));
-    }
-    if e.chance_bonus > 0.001 {
-        parts.push(format!("chance +{:.0}%", e.chance_bonus * 100.0));
-    }
-    if e.cap_mul > 1.001 {
-        parts.push(format!("DNA cap x{:.2}", e.cap_mul));
-    }
-    if e.storage_slots > 0 {
-        parts.push(format!("{} banked evolve slots", e.storage_slots));
-    }
-    let summary = if parts.is_empty() {
-        "discover a category to unlock its upgrade".to_string()
+    // What every purchased kind adds up to right now -- only the ones
+    // actually active, so this stays short early on.
+    let summary = upgrades::ALL_KINDS
+        .iter()
+        .filter(|&&k| game.kind_level(k) > 0)
+        .map(|&k| kind_effect_label(k, kind_effect_amount(k, game.kind_level(k))))
+        .collect::<Vec<_>>()
+        .join("   ·   ");
+    let summary = if summary.is_empty() {
+        "discover a category to unlock its first upgrade".to_string()
     } else {
-        parts.join("   ·   ")
+        summary
     };
     let summary_px = fit_px(&summary, sw * 0.86, UPGRADE_LIST_TOP_PAD * 0.24);
     text(
@@ -939,34 +1092,32 @@ pub fn draw_upgrades(game: &Game, sprites: &Sprites, scroll: f32) {
         TEXT_DIM,
     );
 
-    for (row_i, &(taxon, def)) in rows.iter().enumerate() {
+    for (row_i, &kind) in upgrades::ALL_KINDS.iter().enumerate() {
         let r = upgrade_row_rect(row_i, scroll);
         if r.y + r.h < top || r.y > bottom {
             continue; // off-screen -- cheap cull, the list is longer than one page.
         }
-        draw_upgrade_row(game, sprites, taxon, def, r);
+        draw_upgrade_row(game, kind, r);
     }
 
     // Drawn last: the top and bottom bars are opaque, so they cleanly cover
-    // whatever scrolled underneath them. The toast sits below the two-line
-    // header rather than on top of it -- it can cover a list row instead,
-    // same as it already covers the coil or the map underneath it.
-    draw_hud(game, "BACK", top + UPGRADE_LIST_TOP_PAD + 40.0);
+    // whatever scrolled underneath them.
+    draw_hud(game, "BACK");
     draw_bottom_bar(game, Some(0));
 }
 
-fn draw_upgrade_row(
-    game: &Game,
-    sprites: &Sprites,
-    taxon: usize,
-    def: &upgrades::UpgradeDef,
-    r: Rect,
-) {
+/// One row: a single `Kind`, not a taxon -- see the module doc in
+/// `upgrades.rs`. Locked (never yet chosen by any category) shows "???";
+/// unlocked shows `Kind::title`/`description` (no taxon identity any more --
+/// several categories can share a `Kind`, so naming one would be arbitrary)
+/// and a `BUY` button for its next level.
+fn draw_upgrade_row(game: &Game, kind: Kind, r: Rect) {
     let sw = screen_width();
-    let unlocked = game.unlocked[taxon];
+    let lv = game.kind_level(kind);
+    let unlocked = lv > 0;
     let (x, y, w, h) = (r.x, r.y, r.w, r.h);
     let accent = if unlocked {
-        kind_color(def.kind)
+        kind_color(kind)
     } else {
         LOCKED_BORDER
     };
@@ -982,11 +1133,16 @@ fn draw_upgrade_row(
         faded(accent, if unlocked { 0.8 } else { 0.4 }),
     );
 
-    let icon_size = h * 0.72;
-    let icon_center = Vec2::new(x + h * 0.5, y + h * 0.5);
-    let anim = sprites::pose(game.taxon(taxon).group, taxon, get_time());
-    let tint = if unlocked { WHITE } else { SILHOUETTE };
-    sprites::draw_sprite(sprites.get(taxon), icon_center, icon_size, anim, tint);
+    let swatch_size = h * 0.56;
+    let swatch_center = Vec2::new(x + h * 0.5, y + h * 0.5);
+    let swatch_color = if unlocked { accent } else { SILHOUETTE };
+    draw_rectangle(
+        swatch_center.x - swatch_size * 0.5,
+        swatch_center.y - swatch_size * 0.5,
+        swatch_size,
+        swatch_size,
+        faded(swatch_color, if unlocked { 0.9 } else { 1.0 }),
+    );
 
     let text_x = x + h * 1.05;
 
@@ -995,12 +1151,11 @@ fn draw_upgrade_row(
         return;
     }
 
-    // Right side: buying the next level. Discovering the category already
-    // granted level 1 for free -- this is the only thing DNA ever buys here,
-    // and there is no ceiling on how many times.
-    let lv = game.upgrade_level[taxon];
-    let next_cost = game.upgrade_level_cost(taxon);
-    let affordable = game.can_afford_upgrade_level(taxon);
+    // Right side: buying the next level. The first taxon to choose this
+    // kind already granted level 1 for free -- this is the only thing DNA
+    // ever buys here, and there is no ceiling on how many times.
+    let next_cost = game.upgrade_level_cost(kind);
+    let affordable = game.can_afford_upgrade_level(kind);
     let (bw, bh) = (sw * 0.27, (h * 0.56).max(38.0));
     let (bx, by) = (x + w - h * 0.12 - bw, y + h * 0.5 - bh * 0.5);
     let btn_color = if affordable { ACCENT_OK } else { TEXT_DIM };
@@ -1021,30 +1176,24 @@ fn draw_upgrade_row(
         faded(btn_color, 0.85),
     );
 
-    // Left side: identity, then the effect this upgrade already has -- it
-    // has one from the moment it was discovered, at at least level 1.
+    // Left side: just what this kind does -- no taxon identity any more,
+    // several categories can share one (see the module doc in `upgrades.rs`).
     let text_w = (bx - h * 0.10 - text_x).max(1.0);
-    let title_px = fit_px(def.trait_name, text_w, h * 0.22);
-    text(def.trait_name, text_x, y + h * 0.32, title_px, TEXT);
-    let subtitle = format!("{} · {}", game.taxon(taxon).name, game.taxon(taxon).clade);
+    let title = kind.title();
+    let title_px = fit_px(title, text_w, h * 0.22);
+    text(title, text_x, y + h * 0.32, title_px, TEXT);
+    let subtitle = kind.description();
     // Below ~14px this bitmap font stops being reliably legible -- letters
     // like a/o and U/Y start reading as each other rather than just looking
     // small. `fit_px` only ever shrinks further to make width, so the floor
     // has to be baked into the size passed in, not applied after.
-    let subtitle_px = fit_px(&subtitle, text_w, (h * 0.15).max(14.0));
-    text(&subtitle, text_x, y + h * 0.55, subtitle_px, TEXT_DIM);
+    let subtitle_px = fit_px(subtitle, text_w, (h * 0.15).max(14.0));
+    text(subtitle, text_x, y + h * 0.55, subtitle_px, TEXT_DIM);
 
-    // `Storage` counts whole slots, not a percentage -- see `kind_effect_pct`.
-    let effect = if def.kind == Kind::Storage {
-        format!(
-            "{lv} banked evolve{}  ·  Lv {lv}",
-            if lv == 1 { "" } else { "s" }
-        )
-    } else {
-        let pct = kind_effect_pct(def.kind, lv) * 100.0;
-        let sign = if pct >= 0.0 { "+" } else { "-" };
-        format!("{sign}{:.0}% {}  ·  Lv {lv}", pct.abs(), def.kind.label())
-    };
+    let effect = format!(
+        "{}  ·  Lv {lv}",
+        kind_effect_label(kind, kind_effect_amount(kind, lv))
+    );
     let effect_px = fit_px(&effect, text_w, (h * 0.15).max(14.0));
     text(&effect, text_x, y + h * 0.80, effect_px, accent);
 }
@@ -1082,19 +1231,19 @@ fn pseudo_random(seed: u32) -> f32 {
     (x.sin() * 43758.547).fract().abs()
 }
 
-/// `elapsed` is seconds since Evolve fired, `taxon` is what it produced (or
-/// was attempted on, for a miss), `miss` distinguishes a failed roll -- it
-/// still gets the full effect, just tinted as a fizzle rather than a reveal.
+/// `elapsed` is seconds since Evolve fired, `taxon` is what it produced --
+/// every Evolve discovers something now, so there is no failed-roll or
+/// level-up case to distinguish here any more, only the one taxon it found.
 /// Holds on the fully-revealed frame past `EVOLVE_FX_SECONDS` rather than
 /// ending itself -- `main` only clears it once the player taps.
-pub fn draw_evolve_fx(game: &Game, sprites: &Sprites, taxon: usize, miss: bool, elapsed: f32) {
+pub fn draw_evolve_fx(game: &Game, sprites: &Sprites, taxon: usize, elapsed: f32) {
     if elapsed < EVOLVE_FX_PARTICLE_SECONDS {
         draw_dna_particles(elapsed / EVOLVE_FX_PARTICLE_SECONDS);
         return;
     }
     let t = ((elapsed - EVOLVE_FX_PARTICLE_SECONDS) / EVOLVE_FX_SUMMON_SECONDS).clamp(0.0, 1.0);
     let held = (elapsed - EVOLVE_FX_SECONDS).max(0.0);
-    draw_summon(game, sprites, taxon, miss, t, held);
+    draw_summon(game, sprites, taxon, t, held);
 }
 
 /// DNA streaming out of the top bar and converging on the Evolve button --
@@ -1130,7 +1279,7 @@ fn draw_dna_particles(progress: f32) {
 /// a dark, undersized silhouette to full size and colour, then its name.
 /// `held` is how long it has sat fully revealed, waiting on a tap -- 0 while
 /// the reveal itself is still playing.
-fn draw_summon(game: &Game, sprites: &Sprites, taxon: usize, miss: bool, t: f32, held: f32) {
+fn draw_summon(game: &Game, sprites: &Sprites, taxon: usize, t: f32, held: f32) {
     let (sw, sh) = (screen_width(), screen_height());
     let (w, h) = (sw * 0.74, sh * 0.30);
     let (cx, cy) = (sw * 0.5, sh * 0.42);
@@ -1143,11 +1292,7 @@ fn draw_summon(game: &Game, sprites: &Sprites, taxon: usize, miss: bool, t: f32,
         h,
         faded(PANEL, ease_out_cubic(panel_t) * 0.97),
     );
-    let border = if miss {
-        ACCENT_WARN
-    } else {
-        accent_of(game, taxon)
-    };
+    let border = accent_of(game, taxon);
     draw_rectangle_lines(
         cx - w * 0.5,
         cy - h * 0.5,
@@ -1175,24 +1320,13 @@ fn draw_summon(game: &Game, sprites: &Sprites, taxon: usize, miss: bool, t: f32,
         );
     }
 
-    let tint = if miss {
-        // Never quite arrives at full colour -- reads as a fizzle, not a find.
-        let k = reveal * 0.5;
-        Color::new(
-            SILHOUETTE.r + (ACCENT_WARN.r - SILHOUETTE.r) * k,
-            SILHOUETTE.g + (ACCENT_WARN.g - SILHOUETTE.g) * k,
-            SILHOUETTE.b + (ACCENT_WARN.b - SILHOUETTE.b) * k,
-            1.0,
-        )
-    } else {
-        let k = reveal;
-        Color::new(
-            SILHOUETTE.r + (1.0 - SILHOUETTE.r) * k,
-            SILHOUETTE.g + (1.0 - SILHOUETTE.g) * k,
-            SILHOUETTE.b + (1.0 - SILHOUETTE.b) * k,
-            1.0,
-        )
-    };
+    let k = reveal;
+    let tint = Color::new(
+        SILHOUETTE.r + (1.0 - SILHOUETTE.r) * k,
+        SILHOUETTE.g + (1.0 - SILHOUETTE.g) * k,
+        SILHOUETTE.b + (1.0 - SILHOUETTE.b) * k,
+        1.0,
+    );
     let anim = sprites::pose(game.taxon(taxon).group, taxon, get_time());
     sprites::draw_sprite(
         sprites.get(taxon),
@@ -1202,24 +1336,22 @@ fn draw_summon(game: &Game, sprites: &Sprites, taxon: usize, miss: bool, t: f32,
         tint,
     );
 
-    // Name (or a fizzle notice), fading in once the reveal has mostly landed.
+    // Name, fading in once the reveal has mostly landed.
     let text_t = ((t - 0.55) / 0.35).clamp(0.0, 1.0);
     if text_t <= 0.0 {
         return;
     }
-    let label = if miss {
-        "no reaction".to_string()
-    } else {
-        format!("{}  ·  {}", game.taxon(taxon).name, game.taxon(taxon).clade)
-    };
-    let label_px = fit_px(&label, w * 0.85, h * 0.11);
+    let outcome_px = h * 0.06;
     text_centered(
-        &label,
+        "DISCOVERED",
         cx,
-        cy + h * 0.36,
-        label_px,
-        faded(if miss { ACCENT_WARN } else { TEXT }, text_t),
+        cy + h * 0.25,
+        fit_px("DISCOVERED", w * 0.85, outcome_px),
+        faded(border, text_t),
     );
+    let label = format!("{}  ·  {}", game.taxon(taxon).name, game.taxon(taxon).clade);
+    let label_px = fit_px(&label, w * 0.85, h * 0.11);
+    text_centered(&label, cx, cy + h * 0.36, label_px, faded(TEXT, text_t));
 
     // The card holds here until tapped -- this is what tells the player a
     // tap is what moves on, rather than another timer to wait out.
@@ -1233,5 +1365,88 @@ fn draw_summon(game: &Game, sprites: &Sprites, taxon: usize, miss: bool, t: f32,
             hint_px,
             faded(TEXT_DIM, hint_t * 0.8),
         );
+    }
+}
+
+// --- upgrade-kind picker: the deck-builder choice on a category discovery ---
+//
+// Discovering a category no longer grants a fixed power. Three random
+// `Kind`s are offered and the player picks one -- `Game::choose_upgrade_kind`
+// is what actually activates it. Mode-independent, like the evolve reveal,
+// and drawn after it so the sequence reads as reveal-then-choose; `main`
+// gates every other tap while `Game::pending_choice` is `Some`.
+
+const KIND_CARD_H: f32 = 118.0;
+const KIND_CARD_GAP: f32 = 14.0;
+
+/// Screen-space rect of choice card `i` (0..3) -- the one source of truth
+/// for both drawing it and hit-testing a tap on it.
+pub fn kind_choice_rect(i: usize) -> Rect {
+    let (sw, sh) = (screen_width(), screen_height());
+    let w = (sw * 0.86).min(420.0);
+    let total_h = KIND_CARD_H * 3.0 + KIND_CARD_GAP * 2.0;
+    let top = sh * 0.5 - total_h * 0.5 + sh * 0.05;
+    Rect::new(
+        (sw - w) * 0.5,
+        top + i as f32 * (KIND_CARD_H + KIND_CARD_GAP),
+        w,
+        KIND_CARD_H,
+    )
+}
+
+pub fn draw_kind_picker(game: &Game, sprites: &Sprites, taxon: usize, options: [Kind; 3]) {
+    let (sw, sh) = (screen_width(), screen_height());
+    draw_rectangle(0.0, 0.0, sw, sh, faded(BG, 0.95));
+
+    let taxon_ref = game.taxon(taxon);
+    let def = upgrades::def_for(taxon_ref.name);
+    let top = sh * 0.5 - (KIND_CARD_H * 3.0 + KIND_CARD_GAP * 2.0) * 0.5 + sh * 0.05;
+
+    let icon_center = Vec2::new(sw * 0.5, top - 92.0);
+    let anim = sprites::pose(taxon_ref.group, taxon, get_time());
+    sprites::draw_sprite(sprites.get(taxon), icon_center, 64.0, anim, WHITE);
+
+    text_centered("CHOOSE ITS POWER", sw * 0.5, top - 54.0, 18.0, ACCENT_DNA);
+    let title = match def {
+        Some(d) => format!("{}  ·  {}", taxon_ref.name, d.trait_name),
+        None => taxon_ref.name.to_string(),
+    };
+    text_centered(
+        &title,
+        sw * 0.5,
+        top - 26.0,
+        fit_px(&title, sw * 0.84, 22.0),
+        TEXT,
+    );
+
+    for (i, &kind) in options.iter().enumerate() {
+        let r = kind_choice_rect(i);
+        let accent = kind_color(kind);
+
+        draw_rectangle(r.x, r.y, r.w, r.h, PANEL);
+        draw_rectangle_lines(r.x, r.y, r.w, r.h, 2.0, accent);
+        draw_rectangle(r.x, r.y, 4.0, r.h, accent);
+
+        let pad = 18.0;
+        let label = kind.label();
+        text(label, r.x + pad, r.y + r.h * 0.36, 22.0, TEXT);
+
+        // Descriptions run long enough to wrap rather than shrink to fit --
+        // `wrap_lines` (also used by the fact panel) breaks at word
+        // boundaries instead of crushing the font down to illegible.
+        let desc_px = 14.0;
+        let desc_w = r.w - pad * 2.0;
+        for (j, line) in wrap_lines(kind.description(), desc_w, desc_px)
+            .iter()
+            .enumerate()
+        {
+            text(
+                line,
+                r.x + pad,
+                r.y + r.h * 0.60 + j as f32 * desc_px * 1.3,
+                desc_px,
+                TEXT_DIM,
+            );
+        }
     }
 }

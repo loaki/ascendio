@@ -16,6 +16,7 @@
 use macroquad::prelude::*;
 
 use crate::game::Game;
+use crate::render;
 use crate::tree::Phylogeny;
 
 /// Angular step between consecutive generations. ~7 per revolution.
@@ -215,27 +216,30 @@ impl Nav {
 
 // --- screen regions ---------------------------------------------------------
 
-/// The one species the player is looking at. Tapping this evolves it.
+/// The one species the player is looking at. Tapping this fills its
+/// tap-level bar. Sits low, just above the bottom bar -- the coil gets the
+/// middle of the screen, between this and the fact panel up top
+/// (`render::fact_panel_rect`).
 pub fn card_rect() -> Rect {
     let (sw, sh) = (screen_width(), screen_height());
     // Taller than a plain text card: the top ~40% holds the animated sprite.
     let (w, h) = (sw * 0.84, sh * 0.275);
-    Rect::new((sw - w) * 0.5, sh * 0.125, w, h)
+    let bar_h = render::bar_height();
+    Rect::new((sw - w) * 0.5, sh - bar_h - h - 10.0, w, h)
 }
 
-/// Where the focused taxon sits on the coil, below the card.
+/// Where the focused taxon sits on the coil -- in the band left over
+/// between the fact panel up top and the card down at the bottom now that
+/// the card no longer takes the top of the screen for itself.
 pub fn focus_point() -> Vec2 {
-    Vec2::new(screen_width() * 0.5, screen_height() * 0.665)
+    Vec2::new(screen_width() * 0.5, screen_height() * 0.44)
 }
 
-/// Distance from the focus to the point the coil tightens onto.
+/// Distance from the focus to the point the coil tightens onto. Smaller
+/// than it once was: the coil now shares the screen with the card and the
+/// fact panel instead of owning everything below the card.
 pub fn coil_radius() -> f32 {
-    (screen_width() * 0.30).min(screen_height() * 0.145)
-}
-
-/// Where the discovery toast can sit without covering the card or the coil.
-pub fn toast_y() -> f32 {
-    screen_height() * 0.435
+    (screen_width() * 0.30).min(screen_height() * 0.11)
 }
 
 pub fn label_px(k: f32) -> f32 {
@@ -343,9 +347,13 @@ impl Frame {
         let (t, last) = (nav.t, nav.last());
         let px = label_px(k);
 
+        // Reserves room for the small icon `render::draw_chip` draws to the
+        // left of the label -- `CHIP_ICON` there must match this ratio, or
+        // the icon and text crowd each other.
         let chip = |text: &str, scale: f32| -> Vec2 {
             let p = px * scale;
-            Vec2::new(measure(text, p) * 0.5 + p * 0.6, p * 0.92)
+            let icon = p * 1.3;
+            Vec2::new((measure(text, p) + icon) * 0.5 + p * 0.5, p * 0.92)
         };
         // A long name on the outer coil would otherwise run off the edge.
         let on_screen = |pos: Vec2, half: Vec2| -> Vec2 {

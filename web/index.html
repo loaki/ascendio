@@ -39,6 +39,9 @@
   <!-- gl.js looks this up by id as soon as it loads, so it must come first. -->
   <canvas id="glcanvas" tabindex="1" oncontextmenu="return false;"></canvas>
   <script src="gl.js"></script>
+  <!-- quad-storage's save plugin -- must load after gl.js, before the wasm. -->
+  <script src="sapp_jsutils.js"></script>
+  <script src="quad-storage.js"></script>
   <script>load("ascendio.wasm");</script>
 </body>
 </html>

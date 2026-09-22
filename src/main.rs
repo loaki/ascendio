@@ -11,6 +11,7 @@ mod facts;
 mod game;
 mod layout;
 mod render;
+mod save;
 mod spiral;
 mod sprites;
 mod tree;
@@ -62,21 +63,28 @@ fn autoplay_enabled() -> bool {
     std::env::var("ASCENDIO_AUTOPLAY").is_ok_and(|v| v != "0")
 }
 
+/// Dev aid: `ASCENDIO_FRESH=1` wipes any existing save before deciding
+/// whether to load one, so testing "what a new install sees" does not
+/// require finding and deleting the save file by hand.
+fn fresh_start_requested() -> bool {
+    std::env::var("ASCENDIO_FRESH").is_ok_and(|v| v != "0")
+}
+
 /// Drives `render::draw_evolve_fx`: which taxon to show and how far into the
 /// particle-then-summon sequence we are. Lives independently of `Mode`, so
 /// Evolve never has to change the screen you're looking at to be seen.
 struct EvolveFx {
     elapsed: f32,
     taxon: usize,
-    miss: bool,
 }
 
-/// Picks a random taxon Evolve could act on: unlocked, with something left to
-/// give -- a child to discover, or (once that branch is complete) a
-/// descendant to level up. `None` only once the entire tree is finished.
+/// Picks a random taxon Evolve could act on: unlocked, with at least one
+/// undiscovered direct child -- the frontier of the discovered tree, and
+/// exactly what `Game::evolve` needs to guarantee a real discovery every
+/// time (see its doc comment). `None` only once the entire tree is finished.
 fn pick_evolve_target(game: &Game) -> Option<usize> {
     let live: Vec<usize> = (0..game.phy.len())
-        .filter(|&i| game.unlocked[i] && !game.taxon(i).children.is_empty())
+        .filter(|&i| game.unlocked[i] && game.taxon(i).children.iter().any(|&c| !game.unlocked[c]))
         .collect();
     if live.is_empty() {
         None
@@ -128,7 +136,19 @@ async fn main() {
     macroquad::rand::srand(macroquad::miniquad::date::now() as u64);
 
     let scale = time_scale();
-    let mut game = Game::new(wall_clock(scale));
+    let autoplay = autoplay_enabled();
+    // Dev tooling (autoplay, screenshots) runs against a scratch game, never
+    // the player's real save -- loading one would make runs non-repeatable,
+    // and autoplay's progress has no business landing in a real save either.
+    let persist = !autoplay;
+    if fresh_start_requested() {
+        save::clear();
+    }
+    let mut game = if persist {
+        Game::load(wall_clock(scale)).unwrap_or_else(|| Game::new(wall_clock(scale)))
+    } else {
+        Game::new(wall_clock(scale))
+    };
     let mut nav = Nav::new(&game);
     let mut layout = map_layout(&game);
     // Textures only, so this survives a reset -- the tree shape never changes.
@@ -140,6 +160,10 @@ async fn main() {
     // Where the bottom bar's Upgrades tab returns to when left.
     let mut return_mode = Mode::Spiral;
     let mut upgrades_scroll = 0.0f32;
+    // The taxon whose card is pinned open on the map, from tapping it --
+    // stays on the map rather than jumping to the spiral. `None` until
+    // something is tapped, and cleared by tapping empty space.
+    let mut map_focus: Option<usize> = None;
 
     let mut pinch_accum = 1.0f32;
     // Counts down from EVOLVE_ANIM_SECONDS after a successful Evolve tap;
@@ -151,15 +175,20 @@ async fn main() {
     // between Evolves.
     let mut evolve_fx: Option<EvolveFx> = None;
 
-    // "Did you know?" fact shown on the map view. A random starting point so
-    // a fresh game does not always open on the same one; changes only when
-    // tapped (see the map tap handling below), never on a timer.
+    // "Did you know?" fact shown on the spiral and map while the pool
+    // charges. A random starting point so a fresh game does not always open
+    // on the same one; a tap dismisses it for the rest of this charge cycle
+    // (see `fact_dismissed`), and the next Evolve picks a fresh one.
     let mut fact_index = macroquad::rand::gen_range(0, facts::FACTS.len());
+    let mut fact_dismissed = false;
 
-    let autoplay = autoplay_enabled();
     let mut autoplay_timer = 0.0f32;
     let shot = screenshot_request();
     let mut elapsed = 0.0f32;
+    // Autosaves on an interval rather than every frame -- cheap either way
+    // at this size, but there is no reason to serialize 60 times a second.
+    let mut save_timer = 0.0f32;
+    const SAVE_INTERVAL: f32 = 3.0;
 
     loop {
         let dt = get_frame_time();
@@ -167,10 +196,18 @@ async fn main() {
         game.tick(wall_clock(scale));
 
         if is_key_pressed(KeyCode::Escape) {
+            if persist {
+                game.save(wall_clock(scale));
+            }
             break;
         }
         if is_key_pressed(KeyCode::R) {
             game = Game::new(wall_clock(scale));
+            if persist {
+                // Written immediately, not on the next autosave tick, so a
+                // reset is durable even if the app is closed right after.
+                game.save(wall_clock(scale));
+            }
             nav = Nav::new(&game);
             layout = map_layout(&game);
             mode = Mode::Spiral;
@@ -178,6 +215,8 @@ async fn main() {
             upgrades_scroll = 0.0;
             evolve_anim = 0.0;
             evolve_fx = None;
+            fact_dismissed = false;
+            map_focus = None;
         }
         if is_key_pressed(KeyCode::M) && mode != Mode::Upgrades {
             mode = toggle(mode, &mut cam, &layout);
@@ -214,6 +253,19 @@ async fn main() {
                 }
                 tap = None;
             }
+        } else if let Some(pending) = game.pending_choice {
+            // A category was just discovered and is waiting on a choice --
+            // shown once the reveal above is dismissed. Gates every other
+            // tap until resolved, same as the reveal itself did.
+            if let Some(p) = tap {
+                for (i, &kind) in pending.options.iter().enumerate() {
+                    if render::kind_choice_rect(i).contains(p) {
+                        game.choose_upgrade_kind(pending.taxon, kind);
+                        break;
+                    }
+                }
+            }
+            tap = None;
         } else if let Some(p) = tap {
             if render::mode_button().contains(p) {
                 mode = if mode == Mode::Upgrades {
@@ -231,6 +283,7 @@ async fn main() {
                 // plays on top of whatever screen is up, so there is no need
                 // to jump there any more; the current screen stays put.
                 if let Some(target) = pick_evolve_target(&game) {
+                    let mut fired = true;
                     match game.evolve(target) {
                         EvolveResult::Unlocked(new) => {
                             unlocked_now = Some(new);
@@ -238,35 +291,24 @@ async fn main() {
                             evolve_fx = Some(EvolveFx {
                                 elapsed: 0.0,
                                 taxon: new,
-                                miss: false,
                             });
                         }
-                        EvolveResult::Leveled(child) => {
-                            nav.go_to(&game, child);
-                            nav.t = nav.t_target;
-                            evolve_anim = render::EVOLVE_ANIM_SECONDS;
-                            evolve_fx = Some(EvolveFx {
-                                elapsed: 0.0,
-                                taxon: child,
-                                miss: false,
-                            });
-                        }
-                        EvolveResult::Miss => {
-                            nav.go_to(&game, target);
-                            nav.t = nav.t_target;
-                            evolve_anim = render::EVOLVE_ANIM_SECONDS;
-                            evolve_fx = Some(EvolveFx {
-                                elapsed: 0.0,
-                                taxon: target,
-                                miss: true,
-                            });
-                        }
-                        EvolveResult::Exhausted | EvolveResult::NotReady => {}
+                        EvolveResult::Exhausted | EvolveResult::NotReady => fired = false,
+                    }
+                    // A new charge cycle starts: let the fact panel come
+                    // back, with something new to read.
+                    if fired {
+                        fact_dismissed = false;
+                        fact_index = macroquad::rand::gen_range(0, facts::FACTS.len());
                     }
                 }
                 tap = None;
             }
         }
+
+        // Whether the fact panel is actually on screen right now: only while
+        // charging, and only until the player dismisses this cycle's fact.
+        let showing_fact = render::should_show_fact(&game) && !fact_dismissed;
 
         match mode {
             Mode::Spiral => {
@@ -298,14 +340,21 @@ async fn main() {
                 }
 
                 if let Some(p) = tap {
-                    match Frame::build(&game, &nav, &measure).hit(p) {
-                        // The card is informational now -- Evolve lives in
-                        // the bottom bar, and can land on any eligible
-                        // lineage, not just whichever one is focused here.
-                        Some(Hit::Card) => {}
-                        // Reroutes the lineage through that branch.
-                        Some(Hit::Jump(i)) => nav.go_to(&game, i),
-                        None => {}
+                    if showing_fact && render::fact_panel_rect().contains(p) {
+                        fact_dismissed = true;
+                    } else {
+                        let frame = Frame::build(&game, &nav, &measure);
+                        match frame.hit(p) {
+                            // Tapping the card fills its tap-level bar --
+                            // animals only; a category's card just isn't a
+                            // button (its progression is the upgrade shop).
+                            Some(Hit::Card) => {
+                                game.tap_level(frame.focus);
+                            }
+                            // Reroutes the lineage through that branch.
+                            Some(Hit::Jump(i)) => nav.go_to(&game, i),
+                            None => {}
+                        }
                     }
                 }
 
@@ -322,12 +371,11 @@ async fn main() {
                     upgrades_scroll = (upgrades_scroll - gesture.drag.y).clamp(0.0, max_scroll);
                 }
                 if let Some(p) = tap {
-                    let rows = upgrades::rows(&game.phy);
-                    let hit = rows.iter().enumerate().find(|&(row_i, _)| {
+                    let hit = upgrades::ALL_KINDS.iter().enumerate().find(|&(row_i, _)| {
                         render::upgrade_row_rect(row_i, upgrades_scroll).contains(p)
                     });
-                    if let Some((_, &(taxon, _))) = hit {
-                        game.buy_upgrade_level(taxon);
+                    if let Some((_, &kind)) = hit {
+                        game.buy_upgrade_level(kind);
                     }
                 }
             }
@@ -343,17 +391,23 @@ async fn main() {
                 if gesture.drag != Vec2::ZERO {
                     cam.pan_screen(gesture.drag);
                 }
-                // Tapping the fact panel advances it -- no timer, so it never
-                // changes out from under someone mid-read. Checked first
-                // since the panel floats over the top of the tree.
-                // Tapping a species elsewhere on the map opens it in the spiral.
+                // Tapping the fact panel dismisses it -- checked first since
+                // it floats over the bottom of the tree. Tapping the pinned
+                // card fills its tap-level bar, same as the spiral's.
+                // Tapping a species opens its card right here, rather than
+                // jumping to the spiral; tapping empty space closes
+                // whatever card is open.
                 if let Some(p) = tap {
-                    if render::fact_panel_rect().contains(p) {
-                        fact_index = (fact_index + 1) % facts::FACTS.len();
+                    if showing_fact && render::fact_panel_rect().contains(p) {
+                        fact_dismissed = true;
+                    } else if let Some(focused) =
+                        map_focus.filter(|_| spiral::card_rect().contains(p))
+                    {
+                        game.tap_level(focused);
                     } else if let Some(i) = layout.hit(cam.screen_to_world(p)) {
-                        nav.go_to(&game, i);
-                        nav.t = nav.t_target;
-                        mode = Mode::Spiral;
+                        map_focus = Some(i);
+                    } else {
+                        map_focus = None;
                     }
                 }
                 cam.clamp_to(layout.min, layout.max);
@@ -364,21 +418,23 @@ async fn main() {
             autoplay_timer -= dt;
             if autoplay_timer <= 0.0 {
                 autoplay_timer = 0.03;
+                // A human picks one of the 3 offered kinds; autoplay just
+                // grabs one at random so demo runs never sit stuck waiting.
+                if let Some(pending) = game.pending_choice {
+                    let pick = pending.options[macroquad::rand::gen_range(0, 3)];
+                    game.choose_upgrade_kind(pending.taxon, pick);
+                }
                 // Also buy whatever upgrades it can afford, so a dev/screenshot
                 // run exercises the shop instead of only ever hoarding for Evolve.
-                for i in 0..game.phy.len() {
-                    if game.can_afford_upgrade_level(i) {
-                        game.buy_upgrade_level(i);
+                for kind in upgrades::ALL_KINDS {
+                    if game.can_afford_upgrade_level(kind) {
+                        game.buy_upgrade_level(kind);
                     }
                 }
                 if game.can_evolve() {
-                    let live: Vec<usize> = (0..game.phy.len())
-                        .filter(|&i| game.unlocked[i] && !game.taxon(i).children.is_empty())
-                        .collect();
                     // Skipping the attempt, not the frame -- `continue` here
                     // would jump over next_frame().await and spin the loop.
-                    if !live.is_empty() {
-                        let pick = live[macroquad::rand::gen_range(0, live.len())];
+                    if let Some(pick) = pick_evolve_target(&game) {
                         if let EvolveResult::Unlocked(new) = game.evolve(pick) {
                             unlocked_now = Some(new);
                         }
@@ -388,13 +444,24 @@ async fn main() {
         }
 
         // A discovery extends the tree, so re-route the lineage through the
-        // new species and glide to it.
+        // new species and glide to it -- and, on the map, pin its card open
+        // the same way, so whichever view you're on shows what just happened.
         if let Some(new) = unlocked_now {
             layout = map_layout(&game);
             nav.go_to(&game, new);
+            map_focus = Some(new);
         }
 
         game.update(dt);
+
+        if persist {
+            save_timer -= dt;
+            if save_timer <= 0.0 {
+                save_timer = SAVE_INTERVAL;
+                game.save(wall_clock(scale));
+            }
+        }
+
         evolve_anim = (evolve_anim - dt).max(0.0);
         // Advances the animation, then holds at the fully-revealed frame --
         // `draw_evolve_fx` clamps past `EVOLVE_FX_SECONDS` -- until the tap
@@ -413,18 +480,30 @@ async fn main() {
             }
         }
 
+        let fact = showing_fact.then(|| facts::FACTS[fact_index]);
         match mode {
             Mode::Spiral => {
                 let frame = Frame::build(&game, &nav, &measure);
-                render::draw_spiral(&game, &frame, nav.t, nav.last(), &sprites, evolve_anim);
+                render::draw_spiral(
+                    &game,
+                    &frame,
+                    nav.t,
+                    nav.last(),
+                    &sprites,
+                    evolve_anim,
+                    fact,
+                );
             }
-            Mode::Map => render::draw_map(&game, &layout, &cam, &sprites, facts::FACTS[fact_index]),
-            Mode::Upgrades => render::draw_upgrades(&game, &sprites, upgrades_scroll),
+            Mode::Map => render::draw_map(&game, &layout, &cam, &sprites, fact, map_focus),
+            Mode::Upgrades => render::draw_upgrades(&game, upgrades_scroll),
         }
         // Drawn last, on top of whichever screen is showing, regardless of
-        // where Evolve was pressed from.
+        // where Evolve was pressed from. The choice picker only shows once
+        // the reveal itself has been dismissed -- reveal, then choose.
         if let Some(fx) = &evolve_fx {
-            render::draw_evolve_fx(&game, &sprites, fx.taxon, fx.miss, fx.elapsed);
+            render::draw_evolve_fx(&game, &sprites, fx.taxon, fx.elapsed);
+        } else if let Some(pending) = game.pending_choice {
+            render::draw_kind_picker(&game, &sprites, pending.taxon, pending.options);
         }
 
         if capture_now {

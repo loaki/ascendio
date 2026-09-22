@@ -1,0 +1,6 @@
+[target.wasm32-unknown-unknown]
+# quad-storage/sapp-jsutils import a handful of functions from JS (gl.js's
+# plugin loader supplies them at instantiation time -- see web/index.html);
+# rust-lld doesn't know that and refuses to link with them unresolved unless
+# told they're expected to stay that way.
+rustflags = ["-C", "link-args=--allow-undefined"]
