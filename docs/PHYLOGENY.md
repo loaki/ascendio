@@ -1,6 +1,7 @@
 # Phylogeny data, sources, and the simplifications we made
 
-The tree lives in [`src/tree.rs`](../src/tree.rs) as a flat table of 68 taxa.
+The tree lives in [`src/tree.rs`](../src/tree.rs) as a flat table of 97 taxa. The last 29 were added later and are
+appended, so older saves keep their indices.
 Each row is `(common name, clade, origin in Ma, parent, colour group)`.
 
 This document records where the topology and the dates come from, and — more
@@ -51,7 +52,7 @@ one is cheap to undo — the table is the only thing that would change.
    sees a recognisable animal; the subtitle shows the real clade. A future pass
    should split these into a proper genus-level tip below the clade node.
 
-4. **Breadth is heavily pruned.** 68 nodes stand in for well over a million
+4. **Breadth is heavily pruned.** 97 nodes stand in for well over a million
    described animal species. Whole phyla with no obvious mascot (Bryozoa,
    Nemertea, Onychophora, Priapulida…) are absent.
 

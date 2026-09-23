@@ -1,14 +1,5 @@
-//! "Did you know?" trivia shown in the HUD while the pool is charging.
-//!
-//! Purely passive: no tap, no reward, no effect on the economy. The pacing
-//! this session is built around (see `game.rs`'s module doc) comes from a
-//! logarithmic wait, and anything that lets a tap shorten it would quietly
-//! undo that. This is something to read instead, not a mechanic.
-//!
-//! Every entry is a well-established, textbook-level fact about animal
-//! evolution or the phylogeny this game is built from -- general knowledge,
-//! not a specific claim that would need its own citation the way the tree's
-//! topology does in `docs/PHYLOGENY.md`.
+//! "Did you know?" trivia shown in the lever panel while time runs.
+//! Textbook-level facts only; the tree's own sources are in `docs/PHYLOGENY.md`.
 
 #[rustfmt::skip]
 pub const FACTS: &[&str] = &[

@@ -1,7 +1,4 @@
-//! The one place that knows where the save data actually lives. Everything
-//! else just hands this a JSON string and gets one back -- `quad_storage`
-//! already abstracts browser localStorage (wasm) vs. a local file (native)
-//! behind one API, so there is nothing platform-specific left to do here.
+//! Save storage: localStorage on wasm, a local file natively (`quad_storage`).
 
 const KEY: &str = "ascendio_save_v1";
 

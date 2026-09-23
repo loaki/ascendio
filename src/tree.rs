@@ -1,12 +1,6 @@
-//! The static phylogeny the whole game is built on.
-//!
-//! Topology and divergence estimates are sourced from the phylogenomic
-//! literature -- see `docs/PHYLOGENY.md` for the per-clade citations.
-//! Backbone: Laumer et al. 2019 (Porifera-sister Metazoa), Irisarri et al.
-//! 2017 (jawed vertebrates), Misof et al. 2014 (insects), Upham et al. 2019
-//! (mammals), Prum et al. 2015 (birds).
+//! The static phylogeny the game is built on. Sources: `docs/PHYLOGENY.md`.
 
-/// Visual family of a taxon. Purely cosmetic -- drives node colour.
+/// Visual family of a taxon: picks its sprite art and pose.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Group {
     /// Internal "last common ancestor" nodes: the trunk of the tree.
@@ -21,8 +15,7 @@ pub enum Group {
     Mammal,
 }
 
-/// `(common name, clade, origin in millions of years ago, parent index, group)`
-/// Parents always precede their children, which lets us build the tree in one pass.
+/// `(name, clade, origin in Ma, parent index, group)`, parents first.
 type Row = (&'static str, &'static str, f32, i32, Group);
 
 use Group::*;
@@ -114,6 +107,37 @@ const ROWS: &[Row] = &[
     ("Crocodile",        "Crocodylia",       240.0, 62, Reptile),
     ("Dinosaur",         "Dinosauria",       235.0, 62, Reptile),
     ("Bird",             "Aves",             110.0, 66, Reptile),
+
+    // --- Added later: appended so existing indices (and saves) stay valid --
+    ("Clam",             "Bivalvia",         510.0, 14, Spiralia),
+    ("Squid",            "Decapodiformes",   300.0, 14, Spiralia),
+    ("Ammonite",         "Ammonoidea",       410.0, 14, Spiralia),
+    ("Earthworm",        "Clitellata",       300.0, 17, Spiralia),
+    ("Tardigrade",       "Tardigrada",       530.0, 12, Ecdysozoa),
+    ("Trilobite",        "Trilobita",        521.0, 19, Ecdysozoa),
+    ("Anomalocaris",     "Radiodonta",       515.0, 19, Ecdysozoa),
+    ("Centipede",        "Myriapoda",        430.0, 19, Ecdysozoa),
+    ("Shrimp",           "Caridea",          400.0, 24, Ecdysozoa),
+    ("Bee",              "Apoidea",          120.0, 26, Ecdysozoa),
+    ("Meganeura",        "Meganisoptera",    300.0, 27, Ecdysozoa),
+    ("Dunkleosteus",     "Placodermi",       380.0, 38, Fish),
+    ("Stingray",         "Batoidea",         200.0, 39, Fish),
+    ("Megalodon",        "Otodus",            23.0, 39, Fish),
+    ("Seahorse",         "Hippocampus",       25.0, 40, Fish),
+    ("Anglerfish",       "Lophiiformes",     130.0, 40, Fish),
+    ("Tiktaalik",        "Tiktaalik",        375.0, 41, Fish),
+    ("Salamander",       "Caudata",          165.0, 44, Tetrapod),
+    ("Snake",            "Serpentes",        110.0, 64, Reptile),
+    ("Pterosaur",        "Pterosauria",      228.0, 62, Reptile),
+    ("T. rex",           "Tyrannosaurus",     68.0, 66, Reptile),
+    ("Sauropod",         "Sauropoda",        200.0, 66, Reptile),
+    ("Penguin",          "Spheniscidae",      60.0, 67, Reptile),
+    ("Mammoth",          "Mammuthus",          5.0, 51, Mammal),
+    ("Rabbit",           "Lagomorpha",        55.0, 52, Mammal),
+    ("Horse",            "Equidae",           55.0, 50, Mammal),
+    ("Dolphin",          "Delphinidae",       11.0, 55, Mammal),
+    ("Lion",             "Felidae",           25.0, 54, Mammal),
+    ("Gorilla",          "Gorilla",            9.0, 59, Mammal),
 ];
 
 pub struct Taxon {
@@ -127,7 +151,7 @@ pub struct Taxon {
 }
 
 impl Taxon {
-    /// `"800 Ma"` / `"0.3 Ma"` -- the subtitle under each unlocked node.
+    /// `"800 Ma"` / `"0.3 Ma"`.
     pub fn age_label(&self) -> String {
         if self.mya < 1.0 {
             format!("{:.1} Ma", self.mya)
@@ -144,14 +168,8 @@ pub struct Phylogeny {
 impl Phylogeny {
     pub fn load() -> Self {
         let mut taxa: Vec<Taxon> = Vec::with_capacity(ROWS.len());
-
         for &(name, clade, mya, parent, group) in ROWS {
-            let parent = if parent < 0 {
-                None
-            } else {
-                Some(parent as usize)
-            };
-            // Rows are ordered parents-first, so the parent's depth is already known.
+            let parent = usize::try_from(parent).ok();
             let depth = parent.map_or(0, |p| taxa[p].depth + 1);
             taxa.push(Taxon {
                 name,
@@ -163,7 +181,6 @@ impl Phylogeny {
                 depth,
             });
         }
-
         for i in 0..taxa.len() {
             if let Some(p) = taxa[i].parent {
                 taxa[p].children.push(i);

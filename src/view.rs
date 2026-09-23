@@ -2,12 +2,8 @@
 
 use macroquad::prelude::*;
 
-/// Drag further than this and the gesture is a pan, not a tap.
-///
-/// Relative to the screen, not a fixed pixel count: with `high_dpi` the
-/// framebuffer is in physical pixels, so a constant 12 would be ~4 CSS pixels
-/// on a 3x phone -- far below a finger's natural wobble, and taps would be
-/// swallowed as drags. Android's own touch slop is about 8dp.
+/// Drag further than this and it's a pan, not a tap. Relative to the screen
+/// because with `high_dpi` the framebuffer is in physical pixels.
 fn tap_slop() -> f32 {
     (screen_width().min(screen_height()) * 0.025).max(10.0)
 }
@@ -16,7 +12,6 @@ const MIN_ZOOM: f32 = 0.10;
 const MAX_ZOOM: f32 = 2.5;
 
 pub struct Camera {
-    /// World point the view is centred on.
     pub target: Vec2,
     pub zoom: f32,
 }
@@ -41,7 +36,7 @@ impl Camera {
         (s - Self::screen_center()) / self.zoom + self.target
     }
 
-    /// Zoom about a fixed screen point, so pinching keeps that point still.
+    /// Zooms keeping `screen_anchor` still.
     pub fn zoom_at(&mut self, screen_anchor: Vec2, factor: f32) {
         let before = self.screen_to_world(screen_anchor);
         self.zoom = (self.zoom * factor).clamp(MIN_ZOOM, MAX_ZOOM);
@@ -53,7 +48,6 @@ impl Camera {
         self.target -= delta / self.zoom;
     }
 
-    /// Frames the whole discovered tree.
     pub fn fit(&mut self, min: Vec2, max: Vec2) {
         let size = (max - min).max(Vec2::splat(1.0));
         let pad = 1.15;
@@ -62,8 +56,7 @@ impl Camera {
         self.target = (min + max) * 0.5;
     }
 
-    /// Keeps the tree reachable: the camera may drift a little past the tree's
-    /// bounding box, but never far enough to lose it off-screen.
+    /// Lets the camera drift a little past the tree, never off it.
     pub fn clamp_to(&mut self, min: Vec2, max: Vec2) {
         let margin = Vec2::new(screen_width(), screen_height()) * 0.4 / self.zoom;
         let (a, b) = (min - margin, max + margin);
@@ -71,22 +64,18 @@ impl Camera {
     }
 }
 
-/// One frame's worth of digested input. Both view modes read the same struct
-/// and interpret it differently: the map pans and zooms, the spiral scrolls.
+/// One frame of digested input.
 #[derive(Default)]
 pub struct Gesture {
-    /// Screen position of a completed tap, if any.
     pub tap: Option<Vec2>,
-    /// Drag delta for this frame, once the gesture has passed the tap slop.
+    /// This frame's drag delta, once past the tap slop.
     pub drag: Vec2,
-    /// Where the pointer is now. The spiral needs the absolute position, not
-    /// just the delta, because it converts the drag into a rotation.
     pub pointer: Vec2,
-    /// True on the frame a drag ended, which is when the spiral snaps.
+    /// True on the frame a drag ended.
     pub released: bool,
     /// Wheel notches, positive when scrolling up.
     pub wheel: f32,
-    /// Two-finger pinch for this frame. 1.0 means no pinch.
+    /// This frame's pinch ratio; 1.0 means none.
     pub pinch: f32,
     pub pinch_anchor: Vec2,
 }
@@ -118,7 +107,6 @@ impl Input {
 
         let fingers = touches();
         if fingers.len() >= 2 {
-            // Two-finger pinch. Cancel any single-touch gesture in progress.
             self.press_origin = None;
             self.was_dragging = false;
             let (a, b) = (fingers[0].position, fingers[1].position);
@@ -132,7 +120,7 @@ impl Input {
         }
         self.prev_pinch = None;
 
-        // A single touch arrives as mouse input; macroquad simulates it by default.
+        // macroquad simulates a single touch as the mouse.
         let pos = Vec2::from(mouse_position());
         g.pointer = pos;
 

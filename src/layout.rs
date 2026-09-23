@@ -1,36 +1,25 @@
-//! Tidy tree layout for the map view.
-//!
-//! The tree reads left to right — root at the left, tips at the right — which
-//! is the convention for phylogenies and, on a portrait phone, puts the long
-//! axis of the tree (the sibling spread) along the long axis of the screen.
-//!
-//! Two passes: measure each subtree's height bottom-up, then place nodes
-//! left-to-right inside the space that measurement reserved. Nothing overlaps,
-//! and a parent sits centred against its children.
+//! Tidy tree layout for the map, root at the left. Subtree heights are
+//! measured bottom-up, then nodes are placed in the space reserved.
 
 use macroquad::prelude::Vec2;
 
 use crate::game::Game;
+use crate::spiral::visible_children;
 use crate::tree::Phylogeny;
 
-pub const NODE_H: f32 = 44.0;
+const NODE_H: f32 = 44.0;
 /// Horizontal distance between generations. Must clear the widest label.
-pub const LEVEL_W: f32 = 215.0;
-pub const V_GAP: f32 = 13.0;
-pub const MIN_NODE_W: f32 = 130.0;
-// Wide enough for the same icon budget the unlocked-node text reserves,
-// since a locked node shows a dark silhouette of its real icon too, plus
-// enough room after it for "? ? ?".
-pub const LOCKED_NODE_W: f32 = ICON_BUDGET + 46.0;
+const LEVEL_W: f32 = 215.0;
+const V_GAP: f32 = 13.0;
+const MIN_NODE_W: f32 = 130.0;
+/// Room for the icon plus "? ? ?".
+const LOCKED_NODE_W: f32 = ICON_BUDGET + 46.0;
 const PAD_X: f32 = 18.0;
-/// Space an unlocked node reserves on its left for the map's sprite icon --
-/// must match the icon geometry `render::draw_nodes` actually draws with,
-/// both expressed as a fraction of `NODE_H`.
-pub const ICON_BUDGET: f32 = NODE_H * 1.14;
+/// Must match the icon geometry in `render::draw_nodes`.
+const ICON_BUDGET: f32 = NODE_H * 1.14;
 
 #[derive(Clone, Copy, Default)]
 pub struct NodeBox {
-    /// Centre of the node, in world space.
     pub center: Vec2,
     pub w: f32,
     pub h: f32,
@@ -62,7 +51,6 @@ impl Layout {
         self.boxes[i]
     }
 
-    /// Topmost visible node whose box contains `p`.
     pub fn hit(&self, p: Vec2) -> Option<usize> {
         self.boxes
             .iter()
@@ -95,17 +83,7 @@ pub fn compute(game: &Game, measure_label: &dyn Fn(&str) -> f32) -> Layout {
     Layout { boxes, min, max }
 }
 
-/// Visible children of `i`: a locked taxon shows no descendants of its own.
-fn visible_children(game: &Game, i: usize) -> &[usize] {
-    if game.unlocked[i] {
-        &game.phy.taxa[i].children
-    } else {
-        &[]
-    }
-}
-
-/// Fills `widths` with each node's own box width and `spans` with the vertical
-/// extent its whole subtree needs.
+/// Fills each node's box width and its subtree's vertical span.
 fn measure(
     game: &Game,
     i: usize,
@@ -114,7 +92,6 @@ fn measure(
     spans: &mut [f32],
 ) {
     widths[i] = if game.unlocked[i] {
-        // The icon sits before the text rather than padding both sides.
         (measure_label(game.taxon(i).name) + PAD_X + ICON_BUDGET).max(MIN_NODE_W)
     } else {
         LOCKED_NODE_W
@@ -155,8 +132,6 @@ fn place(
         let children_span: f32 =
             kids.iter().map(|&c| spans[c]).sum::<f32>() + V_GAP * (kids.len() - 1) as f32;
 
-        // Centre the children block inside the band reserved for this subtree,
-        // which matters when the node's own height is the larger of the two.
         let mut cursor = top + (spans[i] - children_span) * 0.5;
         for &c in kids {
             place(game, c, cursor, widths, spans, boxes);
@@ -186,7 +161,6 @@ mod tests {
     #[test]
     fn siblings_never_overlap() {
         let mut game = Game::new(0.0);
-        // Unlock everything so the layout is at its tallest.
         for i in 0..game.phy.len() {
             game.unlocked[i] = true;
             game.level[i] = game.level[i].max(1);

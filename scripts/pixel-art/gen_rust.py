@@ -1,111 +1,81 @@
 #!/usr/bin/env python3
-"""Regenerates the data half of `src/sprites.rs` from the Python sprite defs.
+"""Regenerates the data half of `src/sprites.rs` from `maps.py`.
 
-    python3 scripts/pixel-art/gen_rust.py
+    python3 scripts/pixel-art/gen_rust.py && cargo fmt
 
-Only touches `animal_def` and `template_def` -- everything below the
-"building textures" marker in sprites.rs (the texture builder, the animation
-curves, the Sprites registry, the tests) is hand-written Rust and this script
-never rewrites it. Run `cargo fmt` afterward.
+Every map is rendered with `render.py` and baked into one shared palette.
+Everything below the "building textures" marker in sprites.rs is
+hand-written and kept as is.
 """
 import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from animals import ANIMALS
-from templates import TEMPLATES
+from maps import A, check
+from render import GRID, render
 
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-OUT_PATH = os.path.join(REPO_ROOT, "src", "sprites.rs")
+REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+OUT = os.path.join(REPO, "src", "sprites.rs")
 MARKER = "// --- building textures "
-
-
-def emit_def(name, rows, pal, indent="    "):
-    lines = [f'{indent}"{name}" => SpriteDef {{', f"{indent}    rows: ["]
-    lines += [f'{indent}        "{r}",' for r in rows]
-    lines.append(f"{indent}    ],")
-    pal_items = ", ".join(f"('{c}', 0x{h:06X})" for c, h in pal.items())
-    lines.append(f"{indent}    palette: &[{pal_items}],")
-    lines.append(f"{indent}}},")
-    return "\n".join(lines)
+EYE_CODE = '*'
+CODES = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz#$%&+-=?@^~"
 
 
 def main():
-    out = []
-    out.append("//! Hand-authored pixel art, generated from `scripts/pixel-art/`.")
-    out.append("//!")
-    out.append("//! Do not hand-edit the sprite data below -- regenerate it from the Python")
-    out.append("//! source (see `scripts/pixel-art/README.md`) so the two never drift.")
-    out.append("//! Everything else in this file (the texture builder, the animation curves,")
-    out.append("//! the lookup) is hand-written and safe to edit directly.")
-    out.append("")
-    out.append("use macroquad::prelude::*;")
-    out.append("")
-    out.append("use crate::tree::{Group, Phylogeny};")
-    out.append("")
-    out.append("/// Every sprite is authored on the same small canvas. Small on purpose: it")
-    out.append("/// keeps the whole roster quick to author and reads as a deliberate")
-    out.append("/// minimalist style rather than as missing detail, once nearest-neighbour")
-    out.append("/// scaling blows it up on screen.")
-    out.append("pub const GRID: usize = 12;")
-    out.append("")
-    out.append("/// One sprite: a 12x12 grid of palette characters (row-major, `.` is")
-    out.append("/// transparent) plus that sprite's own small palette.")
-    out.append("struct SpriteDef {")
-    out.append("    rows: [&'static str; GRID],")
-    out.append("    palette: &'static [(char, u32)],")
-    out.append("}")
-    out.append("")
-    out.append("// --- specific, hand-authored animals ----------------------------------------")
-    out.append("")
-    out.append("/// Looked up by `Taxon::name`. Every non-Backbone taxon in `tree.rs` has an")
-    out.append("/// entry here; anything missing falls back to its clade's template.")
-    out.append("fn animal_def(name: &str) -> Option<SpriteDef> {")
-    out.append("    Some(match name {")
-    for name in sorted(ANIMALS.keys()):
-        rows, pal = ANIMALS[name]
-        out.append(emit_def(name, rows, pal, indent="        "))
-    out.append("        _ => return None,")
-    out.append("    })")
-    out.append("}")
-    out.append("")
-    out.append("// --- fallback templates, one per clade, plus the ancestor glyph -------------")
-    out.append("")
-    out.append("/// A `Group::Backbone` taxon is an inferred common ancestor, not a depicted")
-    out.append("/// species -- it gets this abstract branching glyph instead of an animal.")
-    out.append("/// Any other taxon without a specific sprite falls back to its clade's shape,")
-    out.append("/// so every one of the 68 taxa always renders *something* animated.")
-    out.append("fn template_def(group: Group) -> SpriteDef {")
-    out.append("    let key = match group {")
-    out.append('        Group::Backbone => "Ancestor",')
-    out.append('        Group::Basal => "Basal",')
-    out.append('        Group::Spiralia => "Spiralia",')
-    out.append('        Group::Ecdysozoa => "Ecdysozoa",')
-    out.append('        Group::Deuterostome => "Deuterostome",')
-    out.append('        Group::Fish => "Fish",')
-    out.append('        Group::Tetrapod => "Tetrapod",')
-    out.append('        Group::Reptile => "Reptile",')
-    out.append('        Group::Mammal => "Mammal",')
-    out.append("    };")
-    out.append("    match key {")
-    for name in sorted(TEMPLATES.keys()):
-        rows, pal = TEMPLATES[name]
-        out.append(emit_def(name, rows, pal, indent="        "))
-    out.append('        _ => unreachable!("every Group has a template"),')
-    out.append("    }")
-    out.append("}")
-    out.append("")
+    check()
+    rendered = {name: render(name, rows, pal) for name, (rows, pal) in sorted(A.items())}
+    colours = sorted({c for px, _ in rendered.values() for row in px for c in row if c})
+    assert len(colours) < len(CODES), f"{len(colours)} colours, only {len(CODES)} codes"
+    code = {c: CODES[i] for i, c in enumerate(colours)}
+    eye = (16, 20, 32)
 
-    # Everything from the marker onward in the existing file is hand-written
-    # Rust (texture builder, animation, Sprites, tests): keep it verbatim.
-    with open(OUT_PATH) as f:
-        existing = f.read()
-    idx = existing.index(MARKER)
-    hand_written = existing[idx:]
+    out = [
+        "//! Pixel art. The sprite data (above the \"building textures\" marker) is",
+        "//! generated by `scripts/pixel-art/gen_rust.py` from `maps.py`: edit the",
+        "//! maps and rerun, never the data. The code below the marker is hand-written.",
+        "",
+        "use macroquad::prelude::*;",
+        "",
+        "use crate::nodule::Morph;",
+        "use crate::tree::{Group, Phylogeny};",
+        "",
+        f"pub const GRID: usize = {GRID};",
+        "",
+        "/// One character per pixel: `.` transparent, `*` an eye, anything else",
+        "/// indexes `PALETTE` through `CODES`.",
+        "type SpriteDef = [&'static str; GRID];",
+        "",
+        f"const CODES: &str = \"{''.join(code[c] for c in colours)}\";",
+        "",
+        "#[rustfmt::skip]",
+        f"const PALETTE: [u32; {len(colours)}] = [",
+    ]
+    for i in range(0, len(colours), 8):
+        out.append("    " + " ".join(f"0x{r:02X}{g:02X}{b:02X}," for r, g, b in colours[i:i + 8]))
+    out += [
+        "];",
+        "",
+        f"const EYE: u32 = 0x{eye[0]:02X}{eye[1]:02X}{eye[2]:02X};",
+        "",
+        "/// Keyed by `Taxon::name`; \"Ancestor\" is the root's glyph.",
+        "#[rustfmt::skip]",
+        "fn animal_def(name: &str) -> Option<SpriteDef> {",
+        "    Some(match name {",
+    ]
+    for name, (px, eyes) in rendered.items():
+        out.append(f'        "{name}" => [')
+        for y in range(GRID):
+            row = "".join(
+                EYE_CODE if (x, y) in eyes else code[px[y][x]] if px[y][x] else "."
+                for x in range(GRID))
+            out.append(f'            "{row}",')
+        out.append("        ],")
+    out += ["        _ => return None,", "    })", "}", "", ""]
 
-    with open(OUT_PATH, "w") as f:
-        f.write("\n".join(out) + hand_written)
-    print(f"regenerated {OUT_PATH}")
+    old = open(OUT).read()
+    tail = old[old.index(MARKER):]
+    open(OUT, "w").write("\n".join(out) + tail)
+    print(f"wrote {len(rendered)} sprites, {len(colours)} colours to {OUT}")
 
 
 if __name__ == "__main__":

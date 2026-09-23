@@ -1,69 +1,55 @@
-# Pixel art authoring pipeline
+# Pixel art pipeline
 
-`src/sprites.rs`'s sprite *data* (the two functions `animal_def` and
-`template_def`) is generated from the Python here, not hand-written. The
-*code* around it in that file -- the texture builder, the per-clade animation
-curves, the `Sprites` registry, the tests -- is hand-written Rust and the
-generator never touches it.
-
-## Why Python, not Rust, for the data
-
-Authoring a 12x12 pixel grid is trial and error: draw an ellipse here, nudge a
-leg there, look at it, adjust. That loop wants a scripting language and a
-quick raster preview, not a recompile. Python + Pillow gives both; the Rust
-side only needs the finished grids.
-
-## Files
+The sprite data in `src/sprites.rs` (everything above the "building
+textures" marker) is generated from here. The texture builder, morphs,
+animation and tests below the marker are hand-written Rust.
 
 | File | What it is |
 |---|---|
-| `helpers.py` | Grid primitives: `ellipse`, `rect`, `hline`/`vline`, `mirror_right`, etc. |
-| `animals.py` | The 44 hand-authored animals, one function each, keyed by `Taxon::name`. |
-| `templates.py` | The 9 clade fallback shapes (one per `Group`) plus the `Ancestor` glyph. |
-| `preview.py` | Renders every def to one contact-sheet PNG, for eyeballing before you commit. |
-| `gen_rust.py` | Regenerates `src/sprites.rs`'s data half from `animals.py` + `templates.py`. |
+| `maps.py` | Every sprite as a 16x16 material map, keyed by `Taxon::name`, plus the `Ancestor` glyph and the six `Boon …` icons. |
+| `palette.py` | The planet palette (from `backdrop.rs`) and the shadow/base/ink ramp for a colour. |
+| `render.py` | The "rough ink" renderer: two tones, speckle, chipped edges, grit, worn outline. |
+| `preview.py` | A contact sheet of sprites with their silhouettes, for checking they read. |
+| `gen_rust.py` | Renders every map and writes the data half of `src/sprites.rs`. |
 
 ## Workflow
 
 ```bash
-# 1. Edit or add a sprite in animals.py (or templates.py for a clade fallback).
-#    A function per animal, using the helpers in helpers.py, ending in
-#    add("Name", g, {'a': 0xRRGGBB, ...}).
+pip install pillow   # once, for the preview
 
-# 2. Look at it before committing to Rust.
-pip install pillow   # once
-python3 scripts/pixel-art/preview.py /tmp/sheet.png
-# open /tmp/sheet.png
-
-# 3. Regenerate the Rust data and rebuild.
+# 1. Edit or add a map in maps.py.
+# 2. Look at it, colour and bare silhouette side by side.
+python3 scripts/pixel-art/preview.py /tmp/sheet.png "T. rex" Mammoth
+# 3. Bake it into Rust.
 python3 scripts/pixel-art/gen_rust.py
-cargo fmt
-cargo test    # validates every grid is 12x12 with a complete palette
+cargo fmt && cargo test
 ```
 
-## Adding a new animal
+`cargo test` fails if any non-`Backbone` taxon in `src/tree.rs` has no map.
 
-Every non-`Backbone` taxon in `src/tree.rs` should have an entry in
-`animals.py` keyed by its exact `Taxon::name`. If one is missing, that species
-silently falls back to its clade's template from `templates.py` -- correct,
-just generic. `cargo test` doesn't fail on a missing animal (the fallback is
-intentional, not a bug), so check the contact sheet against `tree.rs`'s
-`ROWS` table if you want to know what's still using a template.
+## Maps
 
-## Format
+A map is 16 strings of 16 letters plus a dict of base colours:
 
-12x12, row-major, one character per pixel. `.` is transparent; every other
-character must be a key in that sprite's own `palette` dict (`cargo test`
-catches a mismatch: `every_animal_def_is_a_well_formed_grid`). Each sprite
-owns its palette rather than sharing a global one, so a sprite is fully
-self-contained in its `add(...)` call.
+- `.` is empty.
+- `b` body, `l` belly or pale part, `d` dark marking, `f` limbs or fins, and
+  `r`/`g` accents. Each takes its colour from the dict; `render.py` snaps it
+  to the palette and shades it.
+- `e` eye white, `k` eye, `w` glint, `t` ivory and `m` mouth have fixed
+  colours. `k` pixels become `*` in Rust, so morphs can recolour eyes.
 
-## Why 12x12
+`mirror(half)` builds a symmetric sprite from its left 8 columns.
 
-Small enough that a whole animal is a few minutes of primitive calls, not an
-afternoon of pixel-pushing -- 44 of them needed to happen once, and more will
-get added over time. It also matches the game's stated minimalist style:
-nearest-neighbour upscaling turns the low resolution into a deliberate chunky
-look rather than reading as missing detail. If a future pass wants more
-fidelity, `GRID` in `src/sprites.rs` and the canvas size in `helpers.py` are
-the only two places size is assumed.
+## Style rules
+
+- Vertebrates in side profile facing right. Flat animals (beetle, butterfly,
+  starfish, trilobite) from above. Round ones (jellyfish, octopus, crab) from
+  the front.
+- Exaggerate the one feature a child would draw first: the shark's fin, the
+  elephant's trunk, the snail's spiral, the T. rex's tiny arms.
+- Check the silhouette in the preview. If the black shape alone doesn't say
+  what the animal is, redraw the shape rather than adding detail.
+- Sprites sharing a clade need different silhouettes (Shark and Megalodon,
+  Elephant and Mammoth, Ape, Chimpanzee, Gorilla and Human).
+
+The noise is seeded by the animal's name, so the output is stable between runs.
