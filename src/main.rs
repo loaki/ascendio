@@ -135,6 +135,8 @@ fn window_conf() -> Conf {
         window_height: env_parse("ASCENDIO_H").unwrap_or(960),
         window_resizable: false,
         high_dpi: true,
+        // miniquad defaults to fullscreen on Android, which hides the status bar.
+        fullscreen: false,
         ..Default::default()
     }
 }

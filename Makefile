@@ -42,6 +42,9 @@ ip:
 
 # --- android ----------------------------------------------------------------
 
+# One stamp per make run, shown in the game's top bar and used as the tag.
+VERSION := v$(shell date +%Y.%m.%d-%H%M)
+
 # Android build via the macroquad-maintained toolchain image, with a current
 # Rust on top (scripts/android.Dockerfile). Needs Docker. cargo-quad-apk
 # embeds an old cargo, so Cargo.lock must stay at `version = 3`.
@@ -50,6 +53,7 @@ ip:
 apk:
 	docker build -q -t ascendio-apk -f scripts/android.Dockerfile scripts
 	docker run --rm -v "$(PWD)":/root/src -v "$(PWD)/.android":/root/.android -w /root/src \
+		-e ASCENDIO_VERSION=$(VERSION) \
 		ascendio-apk cargo quad-apk build --release
 	@echo "APK -> target/android-artifacts/release/apk/ascendio.apk"
 
@@ -58,7 +62,7 @@ install: apk
 
 # Publish the APK as a GitHub release. On the phone, the newest one is always at
 #   https://github.com/loaki/ascendio/releases/latest/download/ascendio.apk
-RELEASE_TAG ?= v$(shell date +%Y.%m.%d-%H%M)
+RELEASE_TAG ?= $(VERSION)
 release: apk
 	gh release create $(RELEASE_TAG) target/android-artifacts/release/apk/ascendio.apk \
 		--title "$(RELEASE_TAG)" --notes "Android build of $$(git rev-parse --short HEAD)."

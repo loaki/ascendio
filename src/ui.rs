@@ -120,6 +120,22 @@ pub fn draw_hud(game: &Game, now: f64) {
     let px = bar_h * 0.34;
     draw_rectangle(0.0, 0.0, sw, bar_h, HUD_BG);
     draw_line(0.0, bar_h, sw, bar_h, 1.0, EDGE);
+    // The build (`make apk` sets ASCENDIO_VERSION) and the screen the game
+    // actually got, so a phone screenshot says what it's running.
+    let build = format!(
+        "{}  {}x{}",
+        option_env!("ASCENDIO_VERSION").unwrap_or("dev"),
+        sw as u32,
+        screen_height() as u32
+    );
+    let bpx = px * 0.5;
+    text(
+        &build,
+        sw - px * 0.7 - text_width(&build, bpx),
+        bar_h * 0.46,
+        bpx,
+        TEXT_DIM,
+    );
     text(
         &format!("{} Ma  ·  {}", game.ma_elapsed(now), game.era()),
         px * 0.7,
