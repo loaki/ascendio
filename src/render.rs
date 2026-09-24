@@ -349,7 +349,8 @@ fn draw_nodes(game: &Game, layout: &Layout, cam: &Camera, sprites: &Sprites) {
 // --- shared chrome ----------------------------------------------------------
 
 pub fn bar_height() -> f32 {
-    (screen_height() * 0.085).clamp(56.0, 92.0)
+    let u = screen_width() / 180.0;
+    (screen_height() * 0.085).clamp(u * 21.0, u * 35.0)
 }
 
 /// Word-wraps `s` into lines that fit `max_w` at `px`.

@@ -601,7 +601,7 @@ pub fn draw_wait_panel(game: &Game, sprites: &Sprites) {
 
 pub fn bottom_action_rect() -> Rect {
     let (sw, bar_h) = (screen_width(), render::bar_height());
-    let w = (sw * 0.44).min(260.0);
+    let w = sw * 0.44;
     Rect::new((sw - w) * 0.5, screen_height() - bar_h, w, bar_h)
 }
 
@@ -659,7 +659,7 @@ pub fn draw_bottom_bar(
     }
 
     let e = bottom_action_rect();
-    let (ey, eh) = (e.y + 5.0, e.h - 10.0);
+    let (ey, eh) = (e.y + u() * 2.0, e.h - u() * 4.0);
     let t = get_time() as f32;
     let (label, sub, col, hot) = match game.phase() {
         Phase::Shape if choosing => {
@@ -732,7 +732,7 @@ pub fn draw_bottom_bar(
             &sub,
             e.x + e.w * 0.5,
             ey + eh * 0.82,
-            fit_px(&sub, e.w * 0.9, bar_h * 0.17),
+            fit_px(&sub, e.w * 0.9, bar_h * 0.2),
             faded(col, 0.8),
         );
     }
@@ -748,10 +748,10 @@ pub struct KeystoneView {
 
 fn slot_rect(i: usize) -> Rect {
     let sw = screen_width();
-    let h = u() * 17.0;
+    let h = u() * 21.0;
     Rect::new(
         sw * 0.04,
-        render::bar_height() + u() * 16.0 + i as f32 * (h + u() * 2.0),
+        render::bar_height() + u() * 19.0 + i as f32 * (h + u() * 2.0),
         sw * 0.92,
         h,
     )
@@ -767,7 +767,7 @@ fn cell_size() -> f32 {
 
 fn info_rect() -> Rect {
     let sw = screen_width();
-    let h = u() * 34.0;
+    let h = u() * 46.0;
     Rect::new(
         sw * 0.04,
         screen_height() - render::bar_height() - h - u() * 2.0,
@@ -778,12 +778,12 @@ fn info_rect() -> Rect {
 
 pub fn keystone_equip_rect() -> Rect {
     let r = info_rect();
-    Rect::new(r.x + r.w * 0.64, r.y + r.h * 0.18, r.w * 0.32, r.h * 0.34)
+    Rect::new(r.x + r.w * 0.64, r.y + r.h * 0.1, r.w * 0.32, r.h * 0.3)
 }
 
 pub fn keystone_info_rect() -> Rect {
     let r = info_rect();
-    Rect::new(r.x + r.w * 0.64, r.y + r.h * 0.58, r.w * 0.32, r.h * 0.3)
+    Rect::new(r.x + r.w * 0.64, r.y + r.h * 0.46, r.w * 0.32, r.h * 0.26)
 }
 
 fn collection(game: &Game) -> Vec<usize> {
@@ -828,11 +828,11 @@ pub fn draw_keystones(
     clear_background(render::BG);
     let sw = screen_width();
     let top = render::bar_height();
-    let px = u() * 6.5;
+    let px = u() * 7.5;
     text(
         "KEYSTONES",
         sw * 0.04,
-        top + u() * 8.0,
+        top + u() * 9.0,
         px * 1.2,
         ACCENT_WARN,
     );
@@ -844,7 +844,7 @@ pub fn draw_keystones(
     text(
         note,
         sw * 0.04,
-        top + u() * 13.5,
+        top + u() * 15.5,
         fit_px(note, sw * 0.92, px * 0.8),
         TEXT_DIM,
     );
@@ -898,7 +898,7 @@ pub fn draw_keystones(
                     &line,
                     r.x + r.h * 1.15,
                     r.y + r.h * 0.8,
-                    fit_px(&line, r.w * 0.62, r.h * 0.24),
+                    fit_px(&line, r.w * 0.8, r.h * 0.28),
                     line_col,
                 );
                 let (tag, tag_col) = if dormant.is_some() {
@@ -908,9 +908,9 @@ pub fn draw_keystones(
                 };
                 text(
                     tag,
-                    r.x + r.w - r.h * 0.2 - text_width(tag, r.h * 0.24),
+                    r.x + r.w - r.h * 0.2 - text_width(tag, r.h * 0.26),
                     r.y + r.h * 0.42,
-                    r.h * 0.24,
+                    r.h * 0.26,
                     tag_col,
                 );
             }
@@ -1003,33 +1003,37 @@ pub fn draw_keystones(
         Some(t) => {
             let eco = ecology::of(game.taxon(t).name);
             let col = render::tier_color(eco.tier);
-            assets.glow(vec2(r.x + r.h * 0.5, r.y + r.h * 0.5), r.h * 0.5, col, 0.25);
+            let icon = vec2(r.x + r.h * 0.45, r.y + r.h * 0.42);
+            assets.glow(icon, r.h * 0.45, col, 0.25);
             draw_taxon(
                 sprites,
                 game,
                 t,
                 best_morph(game, t),
-                vec2(r.x + r.h * 0.5, r.y + r.h * 0.5),
-                r.h * 0.6,
+                icon,
+                r.h * 0.55,
                 WHITE,
             );
-            let tx = r.x + r.h * 1.0;
+            // The left column, up to the buttons.
+            let tx = r.x + r.h * 0.9;
+            let col_w = keystone_equip_rect().x - tx - r.w * 0.02;
             text(
                 game.taxon(t).name,
                 tx,
-                r.y + r.h * 0.28,
-                fit_px(game.taxon(t).name, r.w * 0.36, r.h * 0.17),
+                r.y + r.h * 0.2,
+                fit_px(game.taxon(t).name, col_w, r.h * 0.16),
                 TEXT,
             );
-            text(eco.tier.name(), tx, r.y + r.h * 0.48, r.h * 0.13, col);
-            let d = eco.bonus.describe();
-            text(
-                &d,
-                tx,
-                r.y + r.h * 0.68,
-                fit_px(&d, r.w * 0.38, r.h * 0.12),
-                LIME,
-            );
+            text(eco.tier.name(), tx, r.y + r.h * 0.36, r.h * 0.13, col);
+            let px = r.h * 0.13;
+            for (i, line) in wrap_lines(&eco.bonus.describe(), col_w, px)
+                .iter()
+                .take(2)
+                .enumerate()
+            {
+                let y = r.y + r.h * (0.54 + 0.15 * i as f32);
+                text(line, tx, y, fit_px(line, col_w, px), LIME);
+            }
             let (status, status_col) = match game.dormant_reason(t) {
                 Some(why) => (format!("Dormant here: {why}"), ACCENT_WARN),
                 None => (
@@ -1041,11 +1045,12 @@ pub fn draw_keystones(
                     TEXT_DIM,
                 ),
             };
+            let sx = r.x + r.w * 0.04;
             text(
                 &status,
-                tx,
-                r.y + r.h * 0.86,
-                fit_px(&status, r.w * 0.52, r.h * 0.11),
+                sx,
+                r.y + r.h * 0.91,
+                fit_px(&status, r.w * 0.92, r.h * 0.13),
                 status_col,
             );
             let equipped = game.keystones.contains(&t);
@@ -1084,8 +1089,8 @@ pub fn draw_keystones(
             text_centered(
                 "Tap an animal to see its bonus",
                 r.x + r.w * 0.5,
-                r.y + r.h * 0.56,
-                r.h * 0.14,
+                r.y + r.h * 0.55,
+                r.h * 0.12,
                 TEXT_DIM,
             );
         }
