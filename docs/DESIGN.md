@@ -1,8 +1,8 @@
 # Ascendio: game design
 
-> Status: design for the rebuild. It replaces the DNA-pool / Evolve economy
-> described in the README (`game.rs`, `upgrades.rs`). The spiral, the map,
-> the sprites and the tree stay.
+> Status: implemented, except the mass extinction and the leaderboard (see
+> "Not done yet" in the README). Every number here is a first guess that
+> still needs playtesting.
 
 ## The pitch
 
@@ -22,8 +22,8 @@ because the planet needs time, not because the game makes you wait.
 ```
  ┌──────────────┐    ┌─────────────────┐    ┌───────────────────┐    ┌──────────────┐
  │ SHAPE        │ →  │ ACCELERATE TIME │ →  │ EXPRESS GENOME    │ →  │ STEER        │
- │ spend 3 pts  │    │ 6 h real        │    │ 3 cards, rarity,  │    │ pick 1 boon, │
- │ on 5 levers  │    │ = 20 Ma         │    │ staged reveal     │    │ set keystones│
+ │ spend 3 pts  │    │ 2 h to 6 h real │    │ 2 to 6 cards,     │    │ pick 1 boon, │
+ │ on 5 levers  │    │ = 20 to 60 Ma   │    │ staged reveal     │    │ set keystones│
  └──────────────┘    └─────────────────┘    └───────────────────┘    └──────┬───────┘
         ↑                                                                   │
         └───────────────────────────────────────────────────────────────────┘
@@ -47,9 +47,27 @@ because the planet needs time, not because the game makes you wait.
 |---|---|---|
 | 1st ever | 1 min | Teach the loop in the first session |
 | 2nd | 20 min | A reason to return the same day |
-| Every one after | **6 h** | Up to 4 check-ins a day: morning, lunch, evening, night |
+| Every one after | **2 h to 6 h**, the player's choice | Check in as often as you like, but waiting longer pays |
 
-Each cycle is **20 Ma** of in-game time. The HUD shows the total let run so
+After the tutorial, tapping Let time run raises a **dial** all the way
+round the spiral: a dithered halo with a sun on it, 2h at the top and one
+step per half hour clockwise. The lever panel gives way to what the wait
+will bring: the rarity odds, the cards, the morph chance and each
+keystone's share. Longer waits pay more per hour, so a 6h wait always beats
+two 3h ones:
+
+| Wait | Cards | Luck | Morphs | Extra |
+|---|---|---|---|---|
+| 2 h | 2 | +0 | x1 | |
+| 3 h | 3 | +0.75 | x1 | |
+| 4 h | 4 | +3 | x1.5 | |
+| 5 h | 5 | +6.75 | x1.5 | |
+| 6 h | 6 | +12 | x2 | one Rare or better guaranteed |
+
+A half hour adds a 50% chance of one more card. Keystone bonuses stack on
+top (6 cards at most); the tutorial cycles pay like a 3h wait.
+
+Each hour is **10 Ma** of in-game time. The HUD shows the total let run so
 far (e.g. "120 Ma", counting up while a cycle runs) and the era, which is the
 age of your most recent discovery.
 
@@ -107,8 +125,8 @@ never your collection.
 ## The new genome
 
 The animal isn't dug up: it **evolves**. Each cycle ends with a new genome,
-a glowing 3D double helix, and expressing it is the "pack opening". (In the
-code it is still called the nodule: `nodule.rs`, `Phase::Nodule`.)
+a glowing 3D double helix, and expressing it is the "pack opening"
+(`genome.rs` rolls it, `opening.rs` presents it).
 
 ### Presentation (the "pack" moment)
 
@@ -240,7 +258,7 @@ only:
 - **Tailwind.** −1 h wait this cycle.
 - **Tectonics.** +2 adjustment points.
 
-## The 97 taxa
+## The 151 taxa
 
 Legend:
 
@@ -300,13 +318,13 @@ Legend:
 | 46 | Amniote | Land | V≥2 | R | Branch · Affinity: Land |
 | 47 | Mammal | Land | T≥1, V≥2 | R | Branch · Luck |
 | 48 | Platypus | Fresh | T≤3 | L | Morph + first morph guaranteed each week |
-| 49 | Kangaroo | Land | T≥3, V≤3 | R | Affinity: Land |
+| 49 | Marsupial | Land | – | U | Branch · Morph |
 | 50 | Placental | Land | V≥2 | E | Branch · Extra card |
-| 51 | Elephant | Land | T≥3, V≥3 | E | Point |
+| 51 | Afrothere | Land | – | U | Branch · Extra card |
 | 52 | Mouse | Land | V≥1 | C | Quick |
 | 53 | Bat | Forest | O≥3 | R | Extra card |
-| 54 | Wolf | Land | T≤3 | R | Luck |
-| 55 | Whale | Sea | – | E | Affinity: Sea |
+| 54 | Carnivoran | Land | – | U | Branch · Luck |
+| 55 | Cetartiodactyl | Land | – | U | Branch · Affinity: Land |
 | 56 | Primate | Forest | T≥3 | R | Branch · Affinity: Forest |
 | 57 | Lemur | Forest | T≥3 | U | Morph |
 | 58 | Monkey | Forest | T≥3 | R | Branch · Extra card |
@@ -348,6 +366,60 @@ Legend:
 | 94 | Dolphin | Sea | T≥2 | R | Extra card |
 | 95 | Lion | Land | T≥3, 1≤V≤3 | R | Luck |
 | 96 | Gorilla | Forest | T≥3 | R | Point |
+| 97 | Nautilus | Reef | O≥2, T≥2 | R | Living fossil |
+| 98 | Fly | Land | O≥2 | C | Quick |
+| 99 | Clownfish | Reef | O≥2, T≥3 | C | Affinity: Reef |
+| 100 | Lungfish | Fresh | O≥2, T≥3 | R | Affinity: Fresh |
+| 101 | Pig | Land | V≥1 | U | Specimens ×2 |
+| 102 | Tuatara | Forest | 1≤T≤3 | L | Living fossil |
+| 103 | Sea Turtle | Sea | T≥2 | R | Specimens ×2 |
+| 104 | Plesiosaur | Sea | O≥3, T≥2 | E | Extra card |
+| 105 | Ichthyosaur | Sea | O≥3 | E | Luck |
+| 106 | Triceratops | Land | O≥3, T≥3, V≥2 | E | Point |
+| 107 | Velociraptor | Land | O≥3, T≥3, V≤3 | R | Quick |
+| 108 | Archaeopteryx | Forest | O≥3, T≥3 | L | Luck |
+| 109 | Ostrich | Land | T≥3, V≤2 | R | Quick |
+| 110 | Parrot | Forest | T≥3 | E | Point |
+| 111 | Owl | Forest | – | U | Luck |
+| 112 | Koala | Forest | T≥3 | U | Planet: +1 Vegetation/cycle (soil) |
+| 113 | Sloth | Forest | T≥3 | U | Specimens ×2 |
+| 114 | Giraffe | Land | T≥3, 1≤V≤3 | R | Extra card |
+| 115 | Hippo | Fresh | T≥3 | R | Affinity: Fresh |
+| 116 | Rhino | Land | T≥2, 1≤V≤3 | E | Luck |
+| 117 | Bear | Forest | T≤3 | R | Point |
+| 118 | Seal | Shore | T≤2 | U | Affinity: Shore |
+| 119 | Synapsid | Land | O≥2 | U | Branch · Luck |
+| 120 | Archosaur | Land | O≥2 | U | Branch · Affinity: Land |
+| 121 | Theropod | Land | O≥3, T≥3 | R | Branch · Extra card |
+| 122 | Hominin | Land | O≥3, 2≤T≤4, V≥1 | E | Branch · Luck |
+| 123 | Perissodactyl | Land | – | U | Branch · Quick |
+| 124 | Spiny-rayed Fish | Sea | O≥2 | C | Branch · Extra card |
+| 125 | Elephant | Land | T≥3, V≥3 | E | Point |
+| 126 | Whale | Sea | – | E | Affinity: Sea |
+| 127 | Wolf | Land | T≤3 | R | Luck |
+| 128 | Dog | Land | – | U | Luck |
+| 129 | Kangaroo | Land | T≥3, V≤3 | R | Affinity: Land |
+| 130 | Tiger | Forest | T≥1 | E | Luck |
+| 131 | Cat | Land | – | C | Morph |
+| 132 | Sabre-tooth | Land | T≤3 | E | Extra card |
+| 133 | Giant Panda | Forest | 1≤T≤4, V≥3 | E | Specimens ×2 |
+| 134 | Cow | Land | 1≤V≤4 | C | Planet: +1 Vegetation/cycle (soil) |
+| 135 | Chicken | Land | – | C | Extra card |
+| 136 | Songbird | Forest | – | C | Quick |
+| 137 | Dodo | Forest | T≥3 | L | Oddity |
+| 138 | True Bug | Land | O≥2 | C | Quick |
+| 139 | Wasp | Land | O≥3, V≥1 | U | Luck |
+| 140 | Mite | Sea or Land | O≥1 | C | Specimens ×2 |
+| 141 | Termite | Forest | O≥2, T≥3, V≥2 | U | Planet: +1 Vegetation/cycle (soil) |
+| 142 | Moss Animal | Sea | O≥1 | C | Affinity: Reef |
+| 143 | Brittle Star | Sea | O≥1 | C | Quick |
+| 144 | Carp | Fresh | O≥2 | C | Specimens ×2 |
+| 145 | Dickinsonia | Sea | – | R | Oddity |
+| 146 | Dimetrodon | Land | O≥2, T≥3 | R | Luck |
+| 147 | Lucy | Land | O≥3, T≥3, 1≤V≤4 | E | Point |
+| 148 | Neanderthal | Land | O≥3, T≤3 | E | Luck |
+| 149 | Pakicetus | Shore | – | R | Affinity: Shore |
+| 150 | Acanthostega | Fresh | O≥2, T≥3 | R | Affinity: Fresh |
 
 ### Some intended journeys
 
@@ -363,13 +435,13 @@ Legend:
 - **Opposite temperatures:** Wolf and Coelacanth want T≤3, while
   Crocodile wants T≥4. You can't have both at once, so every planet is a
   choice of who shows up.
-- **The long road to Human** is 13 branch discoveries. It needs forests,
+- **The long road to Human** is 15 branch discoveries. It needs forests,
   a warm but not hot climate, and at least Oxygen 3. Humans are Legendary.
 
 ## Leaderboard
 
 Players are ranked by **most advanced animal**: the depth of the deepest
-discovered taxon. Human is step 14. Ties break by collection size, then by
+discovered taxon. Human is step 16. Ties break by collection size, then by
 who got there first. A secondary board ranks by morphs owned.
 
 ## Fairness
@@ -377,26 +449,3 @@ who got there first. A secondary board ranks by morphs owned.
 - No real-money purchases of cycles, genomes or odds, ever.
 - Pity timers and specimen levels mean every genome moves you forward.
 - The session cap is the cycle timer. Quick bonuses are capped at −30%.
-
-## Rebuild plan (code)
-
-| Keep | Change | Replace |
-|---|---|---|
-| `tree.rs`, `sprites.rs`, `spiral.rs`, `layout.rs`, `view.rs`, `save.rs`, `facts.rs` | `render.rs`: new sea-planet background and new overlays. `main.rs`: new modes | `game.rs` becomes `planet.rs` (levers, habitats, cycle timer), `nodule.rs` (roll, pity, morphs, specimens) and `collection.rs` (discovered, levels, keystones, boons). `upgrades.rs` is removed |
-
-The new `Game` keeps the fields the views already read (`phy`, `unlocked`,
-`taxon`), so the spiral and map work unchanged from the first commit.
-
-Suggested order:
-
-1. `planet.rs`: the levers, the linked levers and habitats, the cycle timer
-   with wall-clock catch-up, and its tests.
-2. `nodule.rs`: eligibility, tier roll, pity, morphs and specimens. This is
-   pure logic, heavily tested with seeded RNG.
-3. A new `Game` wiring it together, plus the save format (v2, which
-   discards old saves).
-4. Render: the planet background driven by the levers (dithered sea,
-   ridges, vegetation, ice, vents).
-5. Screens: the lever drawer, the Accelerate button and countdown, the
-   genome opening, the boon pick, and the keystones screen.
-6. Juice: shake and hit-stop by tier, glow colours, sound.

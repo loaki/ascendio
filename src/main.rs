@@ -2,13 +2,15 @@
 //! let time run, evolve the genome it produced. See `docs/DESIGN.md`.
 
 mod backdrop;
+mod dial;
 mod ecology;
 mod facts;
 mod game;
+mod genome;
 mod genome_bg;
 mod layout;
-mod nodule;
 mod opening;
+mod pixel;
 mod planet;
 mod render;
 mod save;
@@ -17,6 +19,7 @@ mod sprites;
 mod tree;
 mod ui;
 mod view;
+mod wait;
 
 use macroquad::prelude::*;
 
@@ -25,7 +28,7 @@ use game::{Game, Phase};
 use layout::Layout;
 use opening::Opening;
 use planet::Lever;
-use spiral::{Frame, Hit, Nav};
+use spiral::{Frame, Nav};
 use sprites::Sprites;
 use ui::{Assets, KeystoneView};
 use view::{Camera, Input};
@@ -40,53 +43,96 @@ enum Mode {
     Keystones,
 }
 
-/// Dev aid: `ASCENDIO_TIME_SCALE=3600` makes an hour pass every second.
-fn time_scale() -> f64 {
-    std::env::var("ASCENDIO_TIME_SCALE")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .filter(|&v: &f64| v > 0.0)
-        .unwrap_or(1.0)
-}
-
-/// Wall clock, so time with the app closed still counts.
-fn wall_clock(scale: f64) -> f64 {
-    macroquad::miniquad::date::now() * scale
-}
+/// Seconds between autosaves.
+const SAVE_INTERVAL: f32 = 3.0;
 
 fn env_flag(key: &str) -> bool {
     std::env::var(key).is_ok_and(|v| v != "0")
 }
 
-/// Dev aid: `ASCENDIO_SHOT=out.png` writes a PNG of the framebuffer and
-/// exits after `ASCENDIO_SHOT_AFTER` seconds (default 5).
-/// `ASCENDIO_SHOT_MODE=map|spiral|keystones` captures that screen instead.
-fn screenshot_request() -> Option<(String, f32, Option<Mode>)> {
-    let path = std::env::var("ASCENDIO_SHOT").ok()?;
-    let after = std::env::var("ASCENDIO_SHOT_AFTER")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(5.0);
-    let mode = match std::env::var("ASCENDIO_SHOT_MODE").as_deref() {
-        Ok("map") => Some(Mode::Map),
-        Ok("spiral") => Some(Mode::Spiral),
-        Ok("keystones") => Some(Mode::Keystones),
-        _ => None,
-    };
-    Some((path, after, mode))
+fn env_parse<T: std::str::FromStr>(key: &str) -> Option<T> {
+    std::env::var(key).ok().and_then(|v| v.parse().ok())
+}
+
+/// A framebuffer capture: write `path` after `after` seconds, then exit.
+struct Shot {
+    path: String,
+    after: f32,
+    mode: Option<Mode>,
+    /// `ASCENDIO_SHOT_MODE=dial`: the spiral with the wait dial up.
+    dial: bool,
+}
+
+/// Dev aids, all read from `ASCENDIO_*` environment variables (see the
+/// README). None of them exist on the web build, so it always plays for real.
+struct Dev {
+    /// `ASCENDIO_TIME_SCALE=3600` makes an hour pass every second.
+    time_scale: f64,
+    /// `ASCENDIO_AUTOPLAY`: shape, run and open cycles by itself.
+    autoplay: bool,
+    /// `ASCENDIO_DEV`: T ends the running cycle, R resets the game.
+    keys: bool,
+    /// Off for autoplay and `ASCENDIO_SCRATCH`: never touch the real save.
+    persist: bool,
+    /// `ASCENDIO_DEMO_TAPS=n`: start on a ready genome and tap it `n` times.
+    demo_taps: Option<u32>,
+    /// `ASCENDIO_SHOT=out.png`, `ASCENDIO_SHOT_AFTER` (default 5) and
+    /// `ASCENDIO_SHOT_MODE=map|spiral|dial|keystones`.
+    shot: Option<Shot>,
+}
+
+impl Dev {
+    fn from_env() -> Self {
+        let autoplay = env_flag("ASCENDIO_AUTOPLAY");
+        let shot_mode = std::env::var("ASCENDIO_SHOT_MODE").ok();
+        let shot = std::env::var("ASCENDIO_SHOT").ok().map(|path| Shot {
+            path,
+            after: env_parse("ASCENDIO_SHOT_AFTER").unwrap_or(5.0),
+            mode: match shot_mode.as_deref() {
+                Some("map") => Some(Mode::Map),
+                Some("spiral" | "dial") => Some(Mode::Spiral),
+                Some("keystones") => Some(Mode::Keystones),
+                _ => None,
+            },
+            dial: shot_mode.as_deref() == Some("dial"),
+        });
+        Self {
+            time_scale: env_parse("ASCENDIO_TIME_SCALE")
+                .filter(|&v: &f64| v > 0.0)
+                .unwrap_or(1.0),
+            autoplay,
+            keys: autoplay || env_flag("ASCENDIO_DEV"),
+            persist: !autoplay && !env_flag("ASCENDIO_SCRATCH"),
+            demo_taps: env_parse("ASCENDIO_DEMO_TAPS"),
+            shot,
+        }
+    }
+
+    /// `ASCENDIO_PLANET=land,veg,o2,temp,volc` forces the planet.
+    fn planet_override() -> Option<planet::Planet> {
+        let spec = std::env::var("ASCENDIO_PLANET").ok()?;
+        let v: Vec<u8> = spec
+            .split(',')
+            .filter_map(|x| x.trim().parse().ok())
+            .collect();
+        let [land, vegetation, oxygen, temperature, volcanism] = v[..] else {
+            return None;
+        };
+        Some(planet::Planet {
+            land,
+            vegetation,
+            oxygen,
+            temperature,
+            volcanism,
+        })
+    }
 }
 
 fn window_conf() -> Conf {
-    let dim = |key: &str, fallback: i32| {
-        std::env::var(key)
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(fallback)
-    };
     Conf {
         window_title: "Ascendio".to_owned(),
-        window_width: dim("ASCENDIO_W", 480),
-        window_height: dim("ASCENDIO_H", 960),
+        window_width: env_parse("ASCENDIO_W").unwrap_or(480),
+        window_height: env_parse("ASCENDIO_H").unwrap_or(960),
         window_resizable: false,
         high_dpi: true,
         ..Default::default()
@@ -104,47 +150,27 @@ fn deepest(game: &Game, opened: &[game::Opened]) -> Option<usize> {
 
 #[macroquad::main(window_conf)]
 async fn main() {
-    let scale = time_scale();
-    let autoplay = env_flag("ASCENDIO_AUTOPLAY");
-    let dev = env_flag("ASCENDIO_DEV") || autoplay;
-    // Dev tooling never touches the player's real save.
-    let persist = !autoplay && !env_flag("ASCENDIO_SCRATCH");
+    let dev = Dev::from_env();
     let save = |g: &Game| {
-        if persist {
+        if dev.persist {
             g.save();
         }
     };
-    // Dev aid: `ASCENDIO_DEMO_TAPS=n` starts on a ready nodule and taps the
-    // opening `n` times, half a second apart.
-    let demo_taps: Option<u32> = std::env::var("ASCENDIO_DEMO_TAPS")
-        .ok()
-        .and_then(|v| v.parse().ok());
     if env_flag("ASCENDIO_FRESH") {
         save::clear();
     }
-    let now = || wall_clock(scale);
-    let mut game = if persist {
+    // Wall clock, so time with the app closed still counts.
+    let now = || macroquad::miniquad::date::now() * dev.time_scale;
+    let mut game = if dev.persist {
         Game::load(now()).unwrap_or_else(|| Game::new(now()))
     } else {
         Game::new(now())
     };
-    // Dev aid: `ASCENDIO_PLANET=land,veg,o2,temp,volc` forces the planet.
-    if let Ok(spec) = std::env::var("ASCENDIO_PLANET") {
-        let v: Vec<u8> = spec
-            .split(',')
-            .filter_map(|x| x.trim().parse().ok())
-            .collect();
-        if let [land, vegetation, oxygen, temperature, volcanism] = v[..] {
-            game.planet = planet::Planet {
-                land,
-                vegetation,
-                oxygen,
-                temperature,
-                volcanism,
-            };
-            game.shaped_from = game.planet;
-        }
+    if let Some(p) = Dev::planet_override() {
+        game.planet = p;
+        game.shaped_from = p;
     }
+    let demo_taps = dev.demo_taps;
     if demo_taps.is_some() {
         game.step_lever(Lever::Oxygen, 1);
         game.accelerate(now());
@@ -170,12 +196,14 @@ async fn main() {
     let mut pinch_accum = 1.0f32;
     let mut fact_index = macroquad::rand::gen_range(0, facts::FACTS.len());
     let mut last_phase = game.phase();
+    // The wait dial is up (after tapping LET TIME RUN).
+    let mut choosing = dev.shot.as_ref().is_some_and(|s| s.dial);
+    // Horizontal drag, in pixels, not yet turned into dial steps.
+    let mut dial_swipe = 0.0f32;
 
-    let shot = screenshot_request();
     let mut elapsed = 0.0f32;
     let mut save_timer = 0.0f32;
     let mut autoplay_timer = 0.0f32;
-    const SAVE_INTERVAL: f32 = 3.0;
 
     loop {
         let dt = get_frame_time();
@@ -188,6 +216,7 @@ async fn main() {
             if last_phase == Phase::Running {
                 fact_index = macroquad::rand::gen_range(0, facts::FACTS.len());
             }
+            choosing &= last_phase == Phase::Shape;
             save(&game);
         }
 
@@ -195,15 +224,16 @@ async fn main() {
             save(&game);
             break;
         }
-        if dev && is_key_pressed(KeyCode::R) {
+        if dev.keys && is_key_pressed(KeyCode::R) {
             game = Game::new(t_now);
             nav = Nav::new(&game);
             layout = map_layout(&game);
             mode = Mode::Spiral;
             detail = None;
             opening = None;
+            choosing = false;
         }
-        if dev && is_key_pressed(KeyCode::T) {
+        if dev.keys && is_key_pressed(KeyCode::T) {
             game.skip_cycle(t_now);
         }
         if is_key_pressed(KeyCode::M) && matches!(mode, Mode::Spiral | Mode::Map) {
@@ -214,9 +244,8 @@ async fn main() {
         let measure = |s: &str, px: f32| render::text_width(s, px);
         let mut tap = gesture.tap;
         if demo_taps.is_some() {
-            if opening.is_none() && game.phase() == Phase::Nodule {
-                let tell = game.nodule_tell().unwrap_or(ecology::Tier::Common);
-                opening = Some(Opening::new(tell, 7));
+            if opening.is_none() && game.phase() == Phase::Genome {
+                opening = Some(Opening::new(&game, 7));
             }
             demo_timer -= dt;
             if demo_left > 0 && demo_timer <= 0.0 {
@@ -226,10 +255,26 @@ async fn main() {
             }
         }
 
+        let dial_live = choosing && mode == Mode::Spiral && opening.is_none() && detail.is_none();
+        if dial_live {
+            let step = wait::STEP_HOURS;
+            if is_key_pressed(KeyCode::Up) || is_key_pressed(KeyCode::Right) {
+                game.set_wait(game.wait_hours + step);
+            }
+            if is_key_pressed(KeyCode::Down) || is_key_pressed(KeyCode::Left) {
+                game.set_wait(game.wait_hours - step);
+            }
+        }
+        let panel = if choosing {
+            ui::wait_panel_rect()
+        } else {
+            ui::panel_rect()
+        };
+
         // Overlays eat taps first.
         if let Some(op) = &mut opening {
             if let Some(p) = tap.take() {
-                let results = op.wants_results().then(|| game.open_nodule(t_now));
+                let results = op.wants_results().then(|| game.open_genome(t_now));
                 let discovered = results.as_ref().and_then(|r| deepest(&game, r));
                 op.tap(p, results);
                 if let Some(new) = discovered {
@@ -272,29 +317,52 @@ async fn main() {
                 tap = None;
             } else if ui::bottom_action_rect().contains(p) {
                 match game.phase() {
+                    Phase::Shape if choosing => {
+                        game.accelerate(t_now);
+                        choosing = false;
+                    }
+                    Phase::Shape if game.wait_choosable() => choosing = true,
                     Phase::Shape => {
                         game.accelerate(t_now);
                     }
-                    Phase::Nodule => {
-                        let tell = game.nodule_tell().unwrap_or(ecology::Tier::Common);
-                        opening = Some(Opening::new(tell, (t_now * 1000.0) as u32));
+                    Phase::Genome => {
+                        opening = Some(Opening::new(&game, (t_now * 1000.0) as u32));
                     }
                     _ => {}
                 }
                 tap = None;
+            } else if mode == Mode::Spiral && choosing && panel.contains(p) {
+                if ui::wait_back_rect().contains(p) {
+                    choosing = false;
+                }
+                tap = None;
             } else if mode == Mode::Spiral
-                && game.phase() == Phase::Nodule
+                && game.phase() == Phase::Genome
                 && ui::panel_rect().contains(p)
             {
-                let tell = game.nodule_tell().unwrap_or(ecology::Tier::Common);
-                opening = Some(Opening::new(tell, (t_now * 1000.0) as u32));
+                opening = Some(Opening::new(&game, (t_now * 1000.0) as u32));
                 tap = None;
             }
         }
 
         match mode {
             Mode::Spiral => {
-                if gesture.drag != Vec2::ZERO && !ui::panel_rect().contains(gesture.pointer) {
+                let dragging = gesture.drag != Vec2::ZERO && !panel.contains(gesture.pointer);
+                if dragging && choosing {
+                    // With the dial up, a swipe sets it, not the spiral:
+                    // right waits longer, left shorter.
+                    dial_swipe += gesture.drag.x;
+                    let step = dial::step_px();
+                    while dial_swipe.abs() >= step {
+                        let dir = dial_swipe.signum();
+                        game.set_wait(game.wait_hours + dir * wait::STEP_HOURS);
+                        dial_swipe -= dir * step;
+                    }
+                }
+                if gesture.released {
+                    dial_swipe = 0.0;
+                }
+                if dragging && !choosing {
                     nav.drag_around(
                         spiral::coil_center(),
                         gesture.pointer - gesture.drag,
@@ -306,7 +374,10 @@ async fn main() {
                 if gesture.released {
                     nav.release();
                 }
-                if gesture.wheel != 0.0 {
+                if choosing && (gesture.wheel != 0.0 || gesture.wheel_x != 0.0) {
+                    let notches = gesture.wheel_x + gesture.wheel;
+                    game.set_wait(game.wait_hours + notches.signum() * wait::STEP_HOURS);
+                } else if gesture.wheel != 0.0 {
                     nav.step(-gesture.wheel);
                 }
                 if gesture.pinch != 1.0 {
@@ -319,20 +390,25 @@ async fn main() {
                     pinch_accum = 1.0;
                 }
                 if let Some(p) = tap {
-                    let lever_hit = Lever::ALL.iter().enumerate().find_map(|(i, &l)| {
-                        [(false, -1i8), (true, 1i8)]
-                            .into_iter()
-                            .find(|&(plus, _)| ui::lever_button(i, plus).contains(p))
-                            .map(|(_, d)| (l, d))
-                    });
+                    // The levers are hidden while the dial is up.
+                    let lever_hit = Lever::ALL
+                        .iter()
+                        .enumerate()
+                        .filter(|_| !choosing)
+                        .find_map(|(i, &l)| {
+                            [(false, -1i8), (true, 1i8)]
+                                .into_iter()
+                                .find(|&(plus, _)| ui::lever_button(i, plus).contains(p))
+                                .map(|(_, d)| (l, d))
+                        });
                     if let Some((lever, delta)) = lever_hit {
                         game.step_lever(lever, delta);
-                    } else if !ui::panel_rect().contains(p) {
+                    } else if !panel.contains(p) {
                         let frame = Frame::build(&game, &nav, &measure);
                         match frame.hit(p) {
-                            Some(Hit::Jump(i)) if i == frame.focus => detail = Some(i),
-                            Some(Hit::Jump(i)) => nav.go_to(&game, i),
-                            _ => {}
+                            Some(i) if i == frame.focus => detail = Some(i),
+                            Some(i) => nav.go_to(&game, i),
+                            None => {}
                         }
                     }
                 }
@@ -384,7 +460,7 @@ async fn main() {
             }
         }
 
-        if autoplay {
+        if dev.autoplay {
             autoplay_timer -= dt;
             if autoplay_timer <= 0.0 {
                 autoplay_timer = 0.15;
@@ -403,9 +479,9 @@ async fn main() {
             op.update(dt);
         }
 
-        let capture_now = shot.as_ref().is_some_and(|&(_, after, _)| elapsed >= after);
-        if capture_now {
-            if let Some(forced) = shot.as_ref().unwrap().2 {
+        let capture = dev.shot.as_ref().filter(|s| elapsed >= s.after);
+        if let Some(shot) = capture {
+            if let Some(forced) = shot.mode {
                 mode = forced;
             }
             if mode == Mode::Map {
@@ -425,20 +501,27 @@ async fn main() {
                 };
                 world_t += dt * speed;
                 backdrop.draw(&shown, world_t, t, dt);
+                if choosing {
+                    dial::draw(game.wait_hours, &sprites, &assets);
+                }
                 let frame = Frame::build(&game, &nav, &measure);
                 render::draw_spiral(&game, &frame, nav.t, nav.last(), &sprites);
                 ui::draw_hud(&game, t_now);
-                ui::draw_lever_panel(&game, t_now, &assets, facts::FACTS[fact_index]);
-                ui::draw_bottom_bar(&game, t_now, None, &assets);
+                if choosing {
+                    ui::draw_wait_panel(&game, &sprites);
+                } else {
+                    ui::draw_lever_panel(&game, t_now, &assets, facts::FACTS[fact_index]);
+                }
+                ui::draw_bottom_bar(&game, t_now, None, choosing, &assets);
             }
             Mode::Map => {
                 render::draw_map(&game, &layout, &cam, &sprites);
                 ui::draw_hud(&game, t_now);
-                ui::draw_bottom_bar(&game, t_now, Some(true), &assets);
+                ui::draw_bottom_bar(&game, t_now, Some(true), choosing, &assets);
             }
             Mode::Keystones => {
                 ui::draw_keystones(&game, t_now, &keystones, &sprites, &assets);
-                ui::draw_bottom_bar(&game, t_now, Some(false), &assets);
+                ui::draw_bottom_bar(&game, t_now, Some(false), choosing, &assets);
             }
         }
         if game.phase() == Phase::Boon && opening.is_none() {
@@ -451,10 +534,14 @@ async fn main() {
             op.draw(&game, &sprites, &assets);
         }
 
-        if capture_now {
-            let (path, _, _) = shot.as_ref().unwrap();
-            get_screen_data().export_png(path);
-            println!("wrote {path} ({}x{})", screen_width(), screen_height());
+        if let Some(shot) = capture {
+            get_screen_data().export_png(&shot.path);
+            println!(
+                "wrote {} ({}x{})",
+                shot.path,
+                screen_width(),
+                screen_height()
+            );
             break;
         }
 
@@ -485,8 +572,8 @@ fn run_autoplay(game: &mut Game, now: f64) {
             game.accelerate(now);
         }
         Phase::Running => game.skip_cycle(now),
-        Phase::Nodule => {
-            game.open_nodule(now);
+        Phase::Genome => {
+            game.open_genome(now);
         }
         Phase::Boon => game.choose_boon(0),
     }

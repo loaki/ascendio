@@ -1,12 +1,13 @@
 //! Game state and its loop: Shape the planet -> time Running -> a new genome
-//! (`Nodule`) waits to be opened -> pick a `Boon` -> Shape again.
+//! (`Genome`) waits to be opened -> pick a `Boon` -> Shape again.
 
 use serde::{Deserialize, Serialize};
 
 use crate::ecology::{self, Bonus, Tier};
-use crate::nodule::{self, Card, Morph, Odds, Pity, Rng};
+use crate::genome::{self, Card, Morph, Odds, Pity, Rng};
 use crate::planet::{self, Cycle, Lever, Planet};
 use crate::tree::{Group, Phylogeny, Taxon};
+use crate::wait;
 
 /// Specimens needed to go from level `n` to `n + 1` (index `n - 1`).
 const LEVEL_STEPS: [u32; 4] = [1, 2, 4, 8];
@@ -14,13 +15,18 @@ pub const MAX_LEVEL: u32 = 5;
 /// Adjustment points cap, whatever the keystones and boons give.
 const MAX_POINTS: u8 = 8;
 const BASE_KEYSTONE_SLOTS: usize = 3;
+/// Keystone effects per unit of strength (tier units x level x morph).
+pub const AFFINITY_PER_UNIT: f32 = 0.10;
+pub const EXTRA_CARD_PER_UNIT: f32 = 0.12;
+pub const MORPH_PER_UNIT: f32 = 0.08;
+pub const QUICK_PER_UNIT: f32 = 0.03;
 const SAVE_VERSION: u32 = 2;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Phase {
     Shape,
     Running,
-    Nodule,
+    Genome,
     Boon,
 }
 
@@ -50,6 +56,18 @@ impl Boon {
             Boon::Charm => "Charm",
             Boon::Tailwind => "Tailwind",
             Boon::Tectonics => "Tectonics",
+        }
+    }
+
+    /// Index into `sprites::BOON_ART`.
+    pub fn icon(self) -> usize {
+        match self {
+            Boon::Lure(_) => 0,
+            Boon::Lens => 1,
+            Boon::Catalyst => 2,
+            Boon::Charm => 3,
+            Boon::Tailwind => 4,
+            Boon::Tectonics => 5,
         }
     }
 
@@ -98,7 +116,13 @@ struct SaveData {
     shaped_from: Planet,
     cycle: Option<Cycle>,
     cycles_done: u32,
-    nodule: Option<Vec<Card>>,
+    /// Absent before the wait could be chosen: every cycle was 20 Ma.
+    #[serde(default)]
+    ma_done: Option<u32>,
+    #[serde(default = "default_wait")]
+    wait_hours: f32,
+    #[serde(alias = "nodule")]
+    genome: Option<Vec<Card>>,
     pity: Pity,
     rng: Rng,
     #[serde(alias = "patrons")]
@@ -123,7 +147,11 @@ pub struct Game {
     pub shaped_from: Planet,
     pub cycle: Option<Cycle>,
     pub cycles_done: u32,
-    pub nodule: Option<Vec<Card>>,
+    /// Millions of years of the finished cycles.
+    pub ma_done: u32,
+    /// The wait picked on the dial, reused as the next default.
+    pub wait_hours: f32,
+    pub genome: Option<Vec<Card>>,
     pub pity: Pity,
     rng: Rng,
     pub keystones: Vec<usize>,
@@ -152,7 +180,9 @@ impl Game {
             shaped_from: Planet::default(),
             cycle: None,
             cycles_done: 0,
-            nodule: None,
+            ma_done: 0,
+            wait_hours: wait::DEFAULT_HOURS,
+            genome: None,
             pity: Pity::default(),
             rng: Rng::new((now * 1000.0) as u64 ^ 0x9E37_79B9_7F4A_7C15),
             keystones: Vec::new(),
@@ -178,7 +208,9 @@ impl Game {
             shaped_from: self.shaped_from,
             cycle: self.cycle,
             cycles_done: self.cycles_done,
-            nodule: self.nodule.clone(),
+            ma_done: Some(self.ma_done),
+            wait_hours: self.wait_hours,
+            genome: self.genome.clone(),
             pity: self.pity,
             rng: self.rng.clone(),
             keystones: self.keystones.clone(),
@@ -223,7 +255,9 @@ impl Game {
             shaped_from: d.shaped_from,
             cycle: d.cycle,
             cycles_done: d.cycles_done,
-            nodule: d.nodule,
+            ma_done: d.ma_done.unwrap_or(d.cycles_done * 20),
+            wait_hours: wait::snap(d.wait_hours),
+            genome: d.genome,
             pity: d.pity,
             rng: d.rng,
             keystones: d.keystones,
@@ -246,8 +280,8 @@ impl Game {
     pub fn phase(&self) -> Phase {
         if self.cycle.is_some() {
             Phase::Running
-        } else if self.nodule.is_some() {
-            Phase::Nodule
+        } else if self.genome.is_some() {
+            Phase::Genome
         } else if self.boon_offer.is_some() {
             Phase::Boon
         } else {
@@ -257,8 +291,8 @@ impl Game {
 
     /// Millions of years let run so far, counting up through a running cycle.
     pub fn ma_elapsed(&self, now: f64) -> u32 {
-        let running = self.cycle.map_or(0.0, |c| c.progress(now));
-        ((self.cycles_done as f64 + running) * planet::MA_PER_CYCLE as f64) as u32
+        let running = self.cycle.map_or(0.0, |c| c.progress(now) * c.ma as f64);
+        self.ma_done + running as u32
     }
 
     /// The deepest discovered taxon; between equally deep ones, the youngest.
@@ -360,11 +394,11 @@ impl Game {
         let mut e = Effects::default();
         for (bonus, s) in self.keystone_bonuses() {
             match bonus {
-                Bonus::Affinity(h) => e.affinity[h.index()] += 0.10 * s,
+                Bonus::Affinity(h) => e.affinity[h.index()] += AFFINITY_PER_UNIT * s,
                 Bonus::Luck => e.luck += s,
-                Bonus::ExtraCard => e.extra_card += 0.12 * s,
-                Bonus::Morph => e.morph += 0.08 * s,
-                Bonus::Quick => e.quick += 0.03 * s,
+                Bonus::ExtraCard => e.extra_card += EXTRA_CARD_PER_UNIT * s,
+                Bonus::Morph => e.morph += MORPH_PER_UNIT * s,
+                Bonus::Quick => e.quick += QUICK_PER_UNIT * s,
                 Bonus::Point => e.points += 1,
                 Bonus::Soil => e.soil += 1,
                 Bonus::DoubleSpecimens => e.double_specimens = true,
@@ -373,7 +407,7 @@ impl Game {
                     e.legendary_pity = 30;
                 }
                 Bonus::Oddity => {
-                    e.morph += 0.08 * s;
+                    e.morph += MORPH_PER_UNIT * s;
                     e.morph_window = Some(7);
                 }
                 Bonus::Mind => {
@@ -445,18 +479,66 @@ impl Game {
     }
 
     pub fn blocked_hint(&self) -> Option<String> {
-        nodule::blocked_hint(&self.phy, &self.unlocked, &self.planet)
+        genome::blocked_hint(&self.phy, &self.unlocked, &self.planet)
     }
 
     pub fn eligible_count(&self) -> usize {
-        nodule::eligible(&self.phy, &self.unlocked, &self.planet).len()
+        genome::eligible(&self.phy, &self.unlocked, &self.planet).len()
+    }
+
+    /// Whether the wait is picked on the dial yet (not in the tutorial).
+    pub fn wait_choosable(&self) -> bool {
+        self.cycles_done >= planet::TUTORIAL_CYCLES
+    }
+
+    pub fn set_wait(&mut self, hours: f32) {
+        self.wait_hours = wait::snap(hours);
+    }
+
+    /// The wait the next cycle is paid for.
+    pub fn next_hours(&self) -> f32 {
+        if self.wait_choosable() {
+            self.wait_hours
+        } else {
+            wait::TUTORIAL_HOURS
+        }
+    }
+
+    /// What the next genome would be rolled with, from the keystones, the
+    /// boon and the wait.
+    pub fn forecast(&self) -> Forecast {
+        self.forecast_for(self.next_hours())
+    }
+
+    fn forecast_for(&self, hours: f32) -> Forecast {
+        let e = self.effects();
+        let w = wait::bonus(hours);
+        let mut affinity = [1.0; 6];
+        for (a, add) in affinity.iter_mut().zip(e.affinity) {
+            *a += add;
+        }
+        let cards = (w.cards + e.extra_card).min(genome::MAX_CARDS as f32);
+        Forecast {
+            cards,
+            ma: wait::ma(hours),
+            odds: Odds {
+                cards: cards.floor() as usize,
+                luck: (e.luck + w.luck).min(15.0),
+                morph_mult: (1.0 + e.morph) * e.morph_mult_boon * w.morph_mult,
+                affinity,
+                lure: match self.boon {
+                    Some(Boon::Lure(t)) => Some(t),
+                    _ => None,
+                },
+                catalyst: self.boon == Some(Boon::Catalyst) || w.sure_rare,
+                legendary_pity: e.legendary_pity,
+                morph_window: e.morph_window,
+            },
+        }
     }
 
     pub fn next_cycle_seconds(&self) -> f64 {
-        if planet::NO_WAIT && !cfg!(test) {
-            return 0.0;
-        }
-        let base = planet::cycle_seconds(self.cycles_done, self.effects().quick);
+        let base = planet::cycle_seconds(self.cycles_done, self.next_hours(), self.effects().quick);
         if self.boon == Some(Boon::Tailwind) {
             (base - 3600.0).max(base * 0.5)
         } else {
@@ -468,10 +550,13 @@ impl Game {
         if self.phase() != Phase::Shape {
             return false;
         }
+        let hours = self.next_hours();
         self.cycle = Some(Cycle {
             started_at: now,
             duration: self.next_cycle_seconds(),
             launched: self.planet,
+            hours,
+            ma: wait::ma(hours),
         });
         true
     }
@@ -479,33 +564,16 @@ impl Game {
     /// A finished cycle becomes a genome waiting to be opened.
     pub fn tick(&mut self, now: f64) {
         let Some(cycle) = self.cycle else { return };
-        let no_wait = planet::NO_WAIT && !cfg!(test);
-        if !cycle.is_done(now) && !no_wait {
+        if !cycle.is_done(now) {
             return;
         }
-        let e = self.effects();
-        let mut cards = 3 + e.extra_card.floor() as usize;
-        if self.rng.chance(e.extra_card.fract()) {
-            cards += 1;
+        let soil = self.effects().soil;
+        let forecast = self.forecast_for(cycle.hours);
+        let mut odds = forecast.odds;
+        if self.rng.chance(forecast.cards.fract()) {
+            odds.cards += 1;
         }
-        let mut affinity = [1.0; 6];
-        for (a, add) in affinity.iter_mut().zip(e.affinity) {
-            *a += add;
-        }
-        let odds = Odds {
-            cards,
-            luck: e.luck,
-            morph_mult: (1.0 + e.morph) * e.morph_mult_boon,
-            affinity,
-            lure: match self.boon {
-                Some(Boon::Lure(t)) => Some(t),
-                _ => None,
-            },
-            catalyst: self.boon == Some(Boon::Catalyst),
-            legendary_pity: e.legendary_pity,
-            morph_window: e.morph_window,
-        };
-        let rolled = nodule::roll(
+        let rolled = genome::roll(
             &self.phy,
             &self.unlocked,
             &cycle.launched,
@@ -513,11 +581,12 @@ impl Game {
             &mut self.pity,
             &mut self.rng,
         );
-        self.nodule = Some(rolled);
-        self.planet = cycle.launched.after_cycle(e.soil as u8);
+        self.genome = Some(rolled);
+        self.planet = cycle.launched.after_cycle(soil as u8);
         self.shaped_from = self.planet;
         self.cycle = None;
         self.cycles_done += 1;
+        self.ma_done += cycle.ma;
         self.boon = None;
     }
 
@@ -530,14 +599,14 @@ impl Game {
     }
 
     /// The best tier in the waiting genome.
-    pub fn nodule_tell(&self) -> Option<Tier> {
-        self.nodule.as_deref().map(nodule::tell)
+    pub fn genome_tell(&self) -> Option<Tier> {
+        self.genome.as_deref().map(genome::tell)
     }
 
     /// Adds the waiting genome to the collection and offers the next boons.
     /// Returns what each card did, best last.
-    pub fn open_nodule(&mut self, now: f64) -> Vec<Opened> {
-        let Some(cards) = self.nodule.take() else {
+    pub fn open_genome(&mut self, now: f64) -> Vec<Opened> {
+        let Some(cards) = self.genome.take() else {
             return Vec::new();
         };
         let ma = self.ma_elapsed(now);
@@ -628,6 +697,19 @@ impl Game {
     }
 }
 
+/// The next genome's odds, before its card count is rolled.
+#[derive(Clone, Debug)]
+pub struct Forecast {
+    /// Expected cards: the fraction is the chance of one more.
+    pub cards: f32,
+    pub odds: Odds,
+    pub ma: u32,
+}
+
+fn default_wait() -> f32 {
+    wait::DEFAULT_HOURS
+}
+
 #[derive(Clone, Debug)]
 pub struct Effects {
     pub affinity: [f32; 6],
@@ -655,7 +737,7 @@ impl Default for Effects {
             points: 0,
             soil: 0,
             double_specimens: false,
-            legendary_pity: nodule::LEGENDARY_PITY,
+            legendary_pity: genome::LEGENDARY_PITY,
             morph_window: None,
         }
     }
@@ -701,8 +783,8 @@ mod tests {
         assert!(g.accelerate(*now));
         *now += g.cycle.unwrap().duration + 1.0;
         g.tick(*now);
-        assert_eq!(g.phase(), Phase::Nodule);
-        let opened = g.open_nodule(*now);
+        assert_eq!(g.phase(), Phase::Genome);
+        let opened = g.open_genome(*now);
         assert_eq!(g.phase(), Phase::Boon);
         g.choose_boon(0);
         assert_eq!(g.phase(), Phase::Shape);
@@ -796,7 +878,7 @@ mod tests {
         g.accelerate(0.0);
         assert!(g.toggle_keystone(5), "still editable while time runs");
         g.skip_cycle(0.0);
-        assert_eq!(g.phase(), Phase::Nodule);
+        assert_eq!(g.phase(), Phase::Genome);
         assert!(!g.toggle_keystone(5), "locked once the genome is ready");
     }
 
@@ -853,12 +935,23 @@ mod tests {
     fn the_most_advanced_prefers_the_youngest_of_equal_depth() {
         let mut g = Game::new(0.0);
         let find = |g: &Game, name| g.phy.taxa.iter().position(|t| t.name == name).unwrap();
-        let (chimp, human) = (find(&g, "Chimpanzee"), find(&g, "Human"));
-        assert_eq!(g.taxon(chimp).depth, g.taxon(human).depth);
-        g.unlocked[chimp] = true;
-        assert_eq!(g.most_advanced(), chimp);
+        let (neanderthal, human) = (find(&g, "Neanderthal"), find(&g, "Human"));
+        assert_eq!(g.taxon(neanderthal).depth, g.taxon(human).depth);
+        g.unlocked[neanderthal] = true;
+        assert_eq!(g.most_advanced(), neanderthal);
         g.unlocked[human] = true;
         assert_eq!(g.most_advanced(), human);
+    }
+
+    #[test]
+    fn a_waiting_genome_saved_under_its_old_name_still_loads() {
+        let mut g = Game::new(0.0);
+        g.accelerate(0.0);
+        g.skip_cycle(0.0);
+        let json = g.to_json().replace("\"genome\":", "\"nodule\":");
+        let back = Game::from_json(&json, 0.0).expect("older save should load");
+        assert_eq!(back.phase(), Phase::Genome);
+        assert_eq!(back.genome, g.genome);
     }
 
     #[test]
@@ -877,10 +970,61 @@ mod tests {
     fn tailwind_shortens_the_wait_but_never_below_half() {
         let mut g = Game::new(0.0);
         g.cycles_done = 5;
+        g.set_wait(6.0);
         g.boon = Some(Boon::Tailwind);
         assert_eq!(g.next_cycle_seconds(), 6.0 * 3600.0 - 3600.0);
         g.cycles_done = 0;
         assert_eq!(g.next_cycle_seconds(), 30.0);
+    }
+
+    #[test]
+    fn the_wait_is_chosen_only_after_the_tutorial() {
+        let mut g = Game::new(0.0);
+        g.set_wait(6.0);
+        assert!(!g.wait_choosable());
+        assert_eq!(g.next_hours(), wait::TUTORIAL_HOURS);
+        assert_eq!(g.next_cycle_seconds(), 60.0);
+        g.cycles_done = planet::TUTORIAL_CYCLES;
+        assert_eq!(g.next_hours(), 6.0);
+        assert_eq!(g.next_cycle_seconds(), 6.0 * 3600.0);
+    }
+
+    #[test]
+    fn a_long_wait_pays_in_cards_luck_and_a_sure_rare() {
+        let mut g = Game::new(0.0);
+        g.cycles_done = planet::TUTORIAL_CYCLES;
+        g.set_wait(2.0);
+        let short = g.forecast();
+        g.set_wait(6.0);
+        let long = g.forecast();
+        assert_eq!((short.odds.cards, long.odds.cards), (2, 6));
+        assert!(long.odds.luck > short.odds.luck);
+        assert!(long.odds.catalyst && !short.odds.catalyst);
+        assert_eq!((short.ma, long.ma), (20, 60));
+    }
+
+    #[test]
+    fn millions_of_years_add_up_per_cycle() {
+        let mut g = Game::new(0.0);
+        g.cycles_done = planet::TUTORIAL_CYCLES;
+        g.set_wait(4.5);
+        g.accelerate(0.0);
+        assert_eq!(g.ma_elapsed(2.25 * 3600.0), 22);
+        g.skip_cycle(0.0);
+        assert_eq!(g.ma_done, 45);
+    }
+
+    #[test]
+    fn a_save_from_before_the_dial_keeps_its_millions_of_years() {
+        let mut g = Game::new(0.0);
+        g.cycles_done = 4;
+        let mut v: serde_json::Value = serde_json::from_str(&g.to_json()).unwrap();
+        let obj = v.as_object_mut().unwrap();
+        obj.remove("ma_done");
+        obj.remove("wait_hours");
+        let back = Game::from_json(&v.to_string(), 0.0).expect("older save should load");
+        assert_eq!(back.ma_done, 80);
+        assert_eq!(back.wait_hours, wait::DEFAULT_HOURS);
     }
 
     #[test]

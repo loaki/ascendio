@@ -91,7 +91,7 @@ const EPIC_PITY: u32 = 10;
 pub const LEGENDARY_PITY: u32 = 40;
 /// A fresh player's first morph arrives within this many genomes.
 const FIRST_MORPH_PITY: u32 = 14;
-const MAX_CARDS: usize = 6;
+pub const MAX_CARDS: usize = 6;
 
 /// Everything that bends the odds for one genome: keystones + the chosen boon.
 #[derive(Clone, Debug)]
@@ -158,7 +158,8 @@ pub fn blocked_hint(phy: &Phylogeny, found: &[bool], planet: &Planet) -> Option<
         })
 }
 
-fn tier_weights(luck: f32) -> [f32; 5] {
+/// Percent chance of each tier, Common first, after `luck`.
+pub fn tier_weights(luck: f32) -> [f32; 5] {
     let luck = luck.clamp(0.0, 15.0);
     let rare_total = 11.0 + 3.5 + 0.5;
     [
@@ -238,6 +239,17 @@ fn pick(
     None
 }
 
+/// Odds of each morph per card at `morph_mult` 1 (a giant can be boosted).
+const AMBER_ODDS: f32 = 1.0 / 512.0;
+const ALBINO_ODDS: f32 = 1.0 / 64.0;
+const MELANISTIC_ODDS: f32 = 1.0 / 64.0;
+const GIANT_ODDS: f32 = 1.0 / 20.0;
+
+/// The chance a card is any morph, ignoring the arthropod giant boost.
+pub fn morph_chance(morph_mult: f32) -> f32 {
+    morph_mult.clamp(0.0, 12.0) * (AMBER_ODDS + ALBINO_ODDS + MELANISTIC_ODDS + GIANT_ODDS)
+}
+
 fn roll_morph(phy: &Phylogeny, taxon: usize, planet: &Planet, odds: &Odds, rng: &mut Rng) -> Morph {
     let m = odds.morph_mult.clamp(0.0, 12.0);
     let arthropod = phy.taxa.iter().position(|t| t.name == "Arthropod");
@@ -247,10 +259,10 @@ fn roll_morph(phy: &Phylogeny, taxon: usize, planet: &Planet, odds: &Odds, rng: 
         1.0
     };
     let r = rng.unit();
-    let amber = m / 512.0;
-    let albino = amber + m / 64.0;
-    let melanistic = albino + m / 64.0;
-    let giant = melanistic + m * giant_boost / 20.0;
+    let amber = m * AMBER_ODDS;
+    let albino = amber + m * ALBINO_ODDS;
+    let melanistic = albino + m * MELANISTIC_ODDS;
+    let giant = melanistic + m * giant_boost * GIANT_ODDS;
     if r < amber {
         Morph::Amber
     } else if r < albino {

@@ -5,7 +5,6 @@
 use macroquad::prelude::*;
 
 use crate::game::Game;
-use crate::render;
 use crate::tree::Phylogeny;
 
 /// Angular step between consecutive generations. ~7 per revolution.
@@ -188,14 +187,6 @@ impl Nav {
 
 // --- screen regions ---------------------------------------------------------
 
-/// The lever panel, just above the bottom bar.
-pub fn card_rect() -> Rect {
-    let (sw, sh) = (screen_width(), screen_height());
-    let (w, h) = (sw * 0.84, sh * 0.275);
-    let bar_h = render::bar_height();
-    Rect::new((sw - w) * 0.5, sh - bar_h - h - 10.0, w, h)
-}
-
 pub fn focus_point() -> Vec2 {
     Vec2::new(screen_width() * 0.5, screen_height() * 0.44)
 }
@@ -281,11 +272,6 @@ pub struct Frame {
     pub focus: usize,
     pub center: Vec2,
     pub k: f32,
-}
-
-/// What a tap on the spiral landed on.
-pub enum Hit {
-    Jump(usize),
 }
 
 impl Frame {
@@ -383,12 +369,13 @@ impl Frame {
         }
     }
 
-    pub fn hit(&self, p: Vec2) -> Option<Hit> {
+    /// The taxon a tap at `p` landed on.
+    pub fn hit(&self, p: Vec2) -> Option<usize> {
         // Spurs sit on top of the coil, so they win ties.
         let mut spurs: Vec<&Spur> = self.spurs.iter().collect();
         spurs.sort_by(|a, b| a.d.abs().partial_cmp(&b.d.abs()).unwrap());
         if let Some(s) = spurs.into_iter().find(|s| inside(p, s.pos, s.half)) {
-            return Some(Hit::Jump(s.taxon));
+            return Some(s.taxon);
         }
 
         let mut beads: Vec<&Bead> = self.beads.iter().collect();
@@ -396,7 +383,7 @@ impl Frame {
         beads
             .into_iter()
             .find(|b| inside(p, b.pos, b.half))
-            .map(|b| Hit::Jump(b.taxon))
+            .map(|b| b.taxon)
     }
 }
 

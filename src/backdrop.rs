@@ -4,38 +4,13 @@
 
 use macroquad::prelude::*;
 
+use crate::pixel::{bayer, hash, mix, Canvas, Rgb, W};
 use crate::planet::Planet;
 
-const W: usize = 180;
 /// Where the volcano rises, in backdrop pixels.
 const VOLCANO_X: i32 = 128;
-/// Ordered-dither thresholds, 4x4 Bayer.
-const BAYER: [f32; 16] = [
-    0.03, 0.53, 0.16, 0.66, 0.78, 0.28, 0.91, 0.41, 0.22, 0.72, 0.09, 0.59, 0.97, 0.47, 0.84, 0.34,
-];
 /// Waterline height as a fraction of the screen, per Land level.
 const WATER: [f32; 6] = [0.14, 0.30, 0.44, 0.58, 0.72, 0.84];
-
-fn bayer(x: i32, y: i32) -> f32 {
-    BAYER[((y & 3) << 2 | (x & 3)) as usize]
-}
-
-type Rgb = [u8; 3];
-
-fn mix(a: Rgb, b: Rgb, f: f32) -> Rgb {
-    let f = f.clamp(0.0, 1.0);
-    [
-        (a[0] as f32 + (b[0] as f32 - a[0] as f32) * f) as u8,
-        (a[1] as f32 + (b[1] as f32 - a[1] as f32) * f) as u8,
-        (a[2] as f32 + (b[2] as f32 - a[2] as f32) * f) as u8,
-    ]
-}
-
-fn hash(x: i32, y: i32) -> f32 {
-    let mut n = (x as u32).wrapping_mul(374_761_393) ^ (y as u32).wrapping_mul(668_265_263);
-    n = (n ^ (n >> 13)).wrapping_mul(1_274_126_177);
-    ((n ^ (n >> 16)) as f32) / u32::MAX as f32
-}
 
 fn ridge(parts: &[(f32, f32, f32)]) -> Vec<f32> {
     (0..512)
@@ -73,9 +48,7 @@ impl Shown {
 }
 
 pub struct Backdrop {
-    h: usize,
-    img: Image,
-    tex: Texture2D,
+    canvas: Canvas,
     ridges: [Vec<f32>; 3],
     shown: Option<Shown>,
 }
@@ -90,14 +63,8 @@ fn table(v: f32, t: &[f32]) -> f32 {
 
 impl Backdrop {
     pub fn new() -> Self {
-        let h = Self::height_for_screen();
-        let img = Image::gen_image_color(W as u16, h as u16, BLACK);
-        let tex = Texture2D::from_image(&img);
-        tex.set_filter(FilterMode::Nearest);
         Self {
-            h,
-            img,
-            tex,
+            canvas: Canvas::new(),
             ridges: [
                 ridge(&[
                     (2.0, 14.0, 0.0),
@@ -117,16 +84,10 @@ impl Backdrop {
         }
     }
 
-    fn height_for_screen() -> usize {
-        ((screen_height() / screen_width().max(1.0)) * W as f32)
-            .round()
-            .clamp(200.0, 480.0) as usize
-    }
-
     /// `t` drives ambient motion (faster while time runs); `calm` is real
     /// time, so the volcano never looks frantic.
     pub fn draw(&mut self, planet: &Planet, t: f32, calm: f32, dt: f32) {
-        if Self::height_for_screen() != self.h {
+        if !self.canvas.fits_screen() {
             *self = Self::new();
         }
         let target = Shown::of(planet);
@@ -146,36 +107,7 @@ impl Backdrop {
         };
         self.shown = Some(s);
         self.paint(&s, t, calm);
-        self.tex.update(&self.img);
-        draw_texture_ex(
-            &self.tex,
-            0.0,
-            0.0,
-            WHITE,
-            DrawTextureParams {
-                dest_size: Some(vec2(screen_width(), screen_height())),
-                ..Default::default()
-            },
-        );
-    }
-
-    fn put(&mut self, x: i32, y: i32, c: Rgb) {
-        if x < 0 || y < 0 || x >= W as i32 || y >= self.h as i32 {
-            return;
-        }
-        let i = (y as usize * W + x as usize) * 4;
-        let d = &mut self.img.bytes;
-        d[i] = c[0];
-        d[i + 1] = c[1];
-        d[i + 2] = c[2];
-        d[i + 3] = 255;
-    }
-
-    fn get(&self, x: i32, y: i32) -> Rgb {
-        let i =
-            (y.clamp(0, self.h as i32 - 1) as usize * W + x.clamp(0, W as i32 - 1) as usize) * 4;
-        let d = &self.img.bytes;
-        [d[i], d[i + 1], d[i + 2]]
+        self.canvas.present();
     }
 
     /// A dithered additive glow.
@@ -190,9 +122,10 @@ impl Backdrop {
                 let (x, y) = (cx as i32 + dx, cy as i32 + dy);
                 let a = (1.0 - d).powf(1.7) * strength;
                 if a > bayer(x, y) * 0.9 {
-                    let o = self.get(x, y);
+                    let o = self.canvas.get(x, y);
                     let add = |o: u8, c: u8| (o as f32 + c as f32 * a * 0.6).min(255.0) as u8;
-                    self.put(x, y, [add(o[0], c[0]), add(o[1], c[1]), add(o[2], c[2])]);
+                    self.canvas
+                        .put(x, y, [add(o[0], c[0]), add(o[1], c[1]), add(o[2], c[2])]);
                 }
             }
         }
@@ -225,13 +158,13 @@ impl Backdrop {
                 if ember && dy > 0 {
                     c = mix(c, [200, 80, 40], 0.5);
                 }
-                self.put(x, y, c);
+                self.canvas.put(x, y, c);
             }
         }
     }
 
     fn paint(&mut self, s: &Shown, t: f32, calm: f32) {
-        let h = self.h as i32;
+        let h = self.canvas.h as i32;
         let sc = h as f32 / 320.0;
         let wy = (table(s.land, &WATER) * h as f32).round() as i32;
         let rise = table(s.land, &[-70.0, 5.0, 30.0, 55.0, 90.0, 120.0]) * sc;
@@ -339,7 +272,7 @@ impl Backdrop {
                     }
                     c
                 };
-                self.put(x, y, c);
+                self.canvas.put(x, y, c);
             }
         }
 
@@ -350,7 +283,7 @@ impl Backdrop {
                     continue;
                 }
                 let w = ((x as f32 * 0.25 + t * 2.0).sin() * 0.8).round() as i32;
-                self.put(
+                self.canvas.put(
                     x,
                     wy + w,
                     if s.temp < 0.5 {
@@ -360,15 +293,15 @@ impl Backdrop {
                     },
                 );
                 if hash(x, (t * 3.0) as i32) > 0.93 {
-                    self.put(x, wy + w - 1, [255, 255, 255]);
-                    self.put(x + 1, wy + w - 1, [255, 255, 255]);
+                    self.canvas.put(x, wy + w - 1, [255, 255, 255]);
+                    self.canvas.put(x + 1, wy + w - 1, [255, 255, 255]);
                 }
             }
             if s.temp < 0.5 {
                 for x in 0..W as i32 {
                     if hash(x >> 3, 5) > 0.25 {
                         for dy in -2..2 {
-                            self.put(x, wy + dy, [223, 238, 246]);
+                            self.canvas.put(x, wy + dy, [223, 238, 246]);
                         }
                     }
                 }
@@ -389,12 +322,12 @@ impl Backdrop {
                     if tp < wy - 1 && !hidden {
                         let th = 2 + (hash(x as i32, li as i32) * veg_level as f32) as i32;
                         for k in 0..th {
-                            self.put(x as i32, tp - 1 - k, [42, 30, 20]);
+                            self.canvas.put(x as i32, tp - 1 - k, [42, 30, 20]);
                         }
                         let leaf = if li == 2 { [31, 90, 28] } else { [47, 122, 42] };
                         for dy in 0..3 {
                             for dx in -1..=1 {
-                                self.put(x as i32 + dx, tp - th - 1 - dy, leaf);
+                                self.canvas.put(x as i32 + dx, tp - th - 1 - dy, leaf);
                             }
                         }
                     }
@@ -417,7 +350,8 @@ impl Backdrop {
                 );
                 for dx in -3..=3 {
                     let f = 0.5 + 0.5 * (dx as f32 * 1.3 + calm * 0.8).sin();
-                    self.put(vx + dx, cy + 1, mix([255, 110, 40], [255, 176, 72], f));
+                    self.canvas
+                        .put(vx + dx, cy + 1, mix([255, 110, 40], [255, 176, 72], f));
                 }
                 if vol > 1.1 {
                     let len = ((vol - 1.0) * 34.0 * sc) as i32;
@@ -435,8 +369,9 @@ impl Backdrop {
                             }
                             let f =
                                 0.5 + 0.5 * (step as f32 * 0.45 - calm * 1.1 + side as f32).sin();
-                            self.put(x, y, mix([200, 62, 28], [255, 156, 64], f * f));
-                            self.put(x, y + 1, [150, 40, 24]);
+                            self.canvas
+                                .put(x, y, mix([200, 62, 28], [255, 156, 64], f * f));
+                            self.canvas.put(x, y + 1, [150, 40, 24]);
                         }
                     }
                     for i in 0..4 {
@@ -444,8 +379,8 @@ impl Backdrop {
                         let x = vx as f32 + (hash(i, 3) - 0.5) * 50.0 * sc * age;
                         let y = cy as f32 - (70.0 * age - 80.0 * age * age) * sc;
                         if (y as i32) < wy {
-                            self.put(x as i32, y as i32, [255, 190, 90]);
-                            self.put(x as i32, y as i32 + 1, [220, 80, 30]);
+                            self.canvas.put(x as i32, y as i32, [255, 190, 90]);
+                            self.canvas.put(x as i32, y as i32 + 1, [220, 80, 30]);
                         }
                     }
                 }
@@ -467,7 +402,7 @@ impl Backdrop {
                     let age = (calm * 0.2 + i as f32 / 8.0) % 1.0;
                     let x = vx as f32 + (i as f32 * 2.1 + calm * 0.8).sin() * 3.0;
                     let y = cy as f32 - age * (cy - wy) as f32;
-                    self.put(x as i32, y as i32, [191, 232, 240]);
+                    self.canvas.put(x as i32, y as i32, [191, 232, 240]);
                 }
                 self.glow(vx as f32, cy as f32, 8.0, [255, 106, 40], 0.3);
             }
@@ -491,7 +426,7 @@ impl Backdrop {
             for dy in -4..=4 {
                 for dx in -4..=4 {
                     if dx * dx + dy * dy <= 18 {
-                        self.put(142 + dx, sy + dy, sun);
+                        self.canvas.put(142 + dx, sy + dy, sun);
                     }
                 }
             }
@@ -508,12 +443,12 @@ impl Backdrop {
                 };
                 for dx in 0..20 {
                     for dy in 0..3 {
-                        self.put(cx + dx, cy + dy, cloud);
+                        self.canvas.put(cx + dx, cy + dy, cloud);
                     }
                 }
                 for dx in 4..14 {
                     for dy in 1..3 {
-                        self.put(cx + dx, cy - dy, cloud);
+                        self.canvas.put(cx + dx, cy - dy, cloud);
                     }
                 }
             }
@@ -531,8 +466,9 @@ impl Backdrop {
                 while sy < hgt {
                     let sway =
                         (t * 1.2 + k as f32 + sy as f32 * 0.05).sin() * 3.0 * sy as f32 / 40.0;
-                    self.put((x0 + sway) as i32, sb - sy, [10, 48, 40]);
-                    self.put((x0 + sway) as i32 + 1, sb - sy, [10, 48, 40]);
+                    self.canvas.put((x0 + sway) as i32, sb - sy, [10, 48, 40]);
+                    self.canvas
+                        .put((x0 + sway) as i32 + 1, sb - sy, [10, 48, 40]);
                     sy += 2;
                 }
             }
@@ -549,7 +485,7 @@ impl Backdrop {
                 } else {
                     [58, 110, 110]
                 };
-                self.put(x as i32, y, c);
+                self.canvas.put(x as i32, y, c);
             }
         }
 
@@ -561,7 +497,7 @@ impl Backdrop {
                 let r = (rx * rx + ry * ry).sqrt();
                 let v = ((r - 0.6) / 0.5).clamp(0.0, 1.0).powf(1.3) * 0.85;
                 if bayer(x, y) < v {
-                    self.put(x, y, [3, 5, 10]);
+                    self.canvas.put(x, y, [3, 5, 10]);
                 }
             }
         }

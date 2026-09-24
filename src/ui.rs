@@ -4,16 +4,17 @@
 
 use macroquad::prelude::*;
 
-use crate::ecology;
+use crate::dial;
+use crate::ecology::{self, Bonus};
 use crate::game::{self, Boon, Game, Phase};
-use crate::nodule::Morph;
+use crate::genome;
+use crate::genome::Morph;
 use crate::planet::{self, Lever};
 use crate::render::{
     self, draw_meter, faded, fit_px, rgb, text, text_centered, text_width, wrap_lines, ACCENT_DNA,
     ACCENT_OK, ACCENT_WARN, EDGE, HUD_BG, LOCKED_TEXT, PANEL, PANEL_LOCKED, SILHOUETTE, TEXT,
     TEXT_DIM, TRACK,
 };
-use crate::spiral;
 use crate::sprites::{self, Sprites};
 
 pub const PINK: Color = rgb(0xFF7AB8);
@@ -145,8 +146,11 @@ pub fn draw_hud(game: &Game, now: f64) {
 
 // --- the lever panel ------------------------------------------------------------
 
+/// The lever panel, just above the bottom bar.
 pub fn panel_rect() -> Rect {
-    spiral::card_rect()
+    let (sw, sh) = (screen_width(), screen_height());
+    let (w, h) = (sw * 0.84, sh * 0.275);
+    Rect::new((sw - w) * 0.5, sh - render::bar_height() - h - 10.0, w, h)
 }
 
 fn lever_row(i: usize) -> Rect {
@@ -190,8 +194,8 @@ fn lever_value(game: &Game, lever: Lever) -> String {
             "Jungle",
         ][p.vegetation as usize]
             .into(),
-        Lever::Oxygen => format!("{}% O2", p.oxygen_percent()),
-        Lever::Temperature => p.temperature_label().into(),
+        Lever::Oxygen => format!("{}% O2", planet::oxygen_percent(p.oxygen)),
+        Lever::Temperature => planet::temperature_label(p.temperature).into(),
         Lever::Volcanism => ["Calm", "Active", "Violent"][p.volcanism as usize].into(),
     }
 }
@@ -271,10 +275,7 @@ pub fn draw_lever_panel(game: &Game, now: f64, assets: &Assets, fact: &str) {
             );
             let bar = Rect::new(r.x + r.w * 0.08, r.y + r.h * 0.48, r.w * 0.84, r.h * 0.035);
             draw_meter(bar.x, bar.y, bar.w, bar.h, c.progress(now) as f32, LIME);
-            let msg = format!(
-                "{} million years pass  ·  you can close the app",
-                planet::MA_PER_CYCLE
-            );
+            let msg = format!("{} million years pass  ·  you can close the app", c.ma);
             text_centered(
                 &msg,
                 cx,
@@ -293,7 +294,7 @@ pub fn draw_lever_panel(game: &Game, now: f64, assets: &Assets, fact: &str) {
                 );
             }
         }
-        Phase::Nodule | Phase::Boon => {
+        Phase::Genome | Phase::Boon => {
             let cx = r.x + r.w * 0.5;
             let pulse = 0.5 + 0.5 * (t * 3.0).sin();
             assets.glow(
@@ -419,6 +420,183 @@ pub fn draw_lever_panel(game: &Game, now: f64, assets: &Assets, fact: &str) {
     }
 }
 
+// --- the wait panel (with the dial) ------------------------------------------------
+
+/// "4H", or "4H30" for a half hour.
+pub fn hours_label(hours: f32) -> String {
+    if hours.fract() > 0.0 {
+        format!("{}H30", hours.floor())
+    } else {
+        format!("{hours}H")
+    }
+}
+
+/// Between the dial's halo and the bottom bar.
+pub fn wait_panel_rect() -> Rect {
+    let r = panel_rect();
+    let top = dial::center().y + dial::radius() + dial::max_half_width() + u() * 3.0;
+    let bottom = r.y + r.h;
+    let top = top.min(bottom - u() * 52.0);
+    Rect::new(r.x, top, r.w, bottom - top)
+}
+
+pub fn wait_back_rect() -> Rect {
+    let r = wait_panel_rect();
+    let (w, h) = (u() * 22.0, u() * 8.0);
+    Rect::new(r.x + r.w - w - u() * 3.0, r.y + u() * 2.5, w, h)
+}
+
+/// What an equipped keystone adds, short enough for the wait panel.
+fn keystone_effect(game: &Game, taxon: usize) -> String {
+    if game.dormant_reason(taxon).is_some() {
+        return "dormant".into();
+    }
+    let s = game.keystone_strength(taxon);
+    let pct = |per: f32| format!("{:.0}%", per * s * 100.0);
+    match ecology::of(game.taxon(taxon).name).bonus {
+        Bonus::Affinity(h) => format!(
+            "x{:.1} {}",
+            1.0 + game::AFFINITY_PER_UNIT * s,
+            h.name().to_lowercase()
+        ),
+        Bonus::Luck | Bonus::LivingFossil => format!("+{s:.1} luck"),
+        Bonus::ExtraCard => format!("+{} card", pct(game::EXTRA_CARD_PER_UNIT)),
+        Bonus::Morph | Bonus::Oddity => format!("+{} morph", pct(game::MORPH_PER_UNIT)),
+        Bonus::Quick => format!("-{} wait", pct(game::QUICK_PER_UNIT)),
+        Bonus::Point => "+1 point".into(),
+        Bonus::Soil => "+1 vegetation".into(),
+        Bonus::DoubleSpecimens => "x2 duplicates".into(),
+        Bonus::Mind => format!("+1 pt, +{s:.1} luck"),
+    }
+}
+
+/// What the chosen wait and the keystones will bring: the rarity odds, the
+/// cards and the morph chance, then each keystone's share.
+pub fn draw_wait_panel(game: &Game, sprites: &Sprites) {
+    let r = wait_panel_rect();
+    let u = u();
+    frame(r, faded(rgb(0x05090F), 0.9), rgb(0x1B2C48), 1.5);
+    let f = game.forecast();
+    let row = r.h / 5.4;
+    let px = (row * 0.62).min(u * 6.5);
+    let (x, w) = (r.x + r.w * 0.04, r.w * 0.92);
+    let mut y = r.y + row * 0.85;
+
+    text("THE AGES WILL BRING", x, y, px, ACCENT_WARN);
+    let b = wait_back_rect();
+    frame(b, rgb(0x0A1422), rgb(0x2F6B72), 1.5);
+    text_centered("BACK", b.x + b.w * 0.5, b.y + b.h * 0.75, b.h * 0.7, TEXT);
+
+    // Rarity odds, as one bar in the tier colours.
+    y += row * 0.35;
+    let weights = genome::tier_weights(f.odds.luck);
+    let mut bx = x;
+    draw_rectangle(x, y, w, u * 3.5, TRACK);
+    for (t, &pct) in ecology::Tier::ALL.iter().zip(&weights) {
+        let bw = w * pct / 100.0;
+        draw_rectangle(bx, y, bw, u * 3.5, render::tier_color(*t));
+        bx += bw;
+    }
+    y += u * 3.5 + row * 0.75;
+    let cell = w / 5.0;
+    for (k, (t, &pct)) in ecology::Tier::ALL.iter().zip(&weights).enumerate() {
+        let label = format!("{} {:.0}%", &t.name()[..1], pct.max(0.0));
+        let label = if pct < 1.0 {
+            format!("{} {pct:.1}%", &t.name()[..1])
+        } else {
+            label
+        };
+        text(
+            &label,
+            x + k as f32 * cell,
+            y,
+            px * 0.9,
+            render::tier_color(*t),
+        );
+    }
+
+    // The cards: solid ones are sure, a dashed one is a chance.
+    y += row * 0.4;
+    let (cw, ch) = (u * 5.0, u * 7.0);
+    let sure = f.odds.cards;
+    let chance = f.cards.fract();
+    let col = dial::color(game.wait_hours);
+    for k in 0..genome::MAX_CARDS {
+        let cx = x + k as f32 * (cw + u * 1.5);
+        let (fill, edge) = if k < sure {
+            (rgb(0x0A1020), col)
+        } else if k == sure && chance > 0.0 {
+            (rgb(0x05090F), rgb(0x5A6678))
+        } else {
+            (rgb(0x05090F), rgb(0x141C26))
+        };
+        frame(Rect::new(cx, y, cw, ch), fill, edge, 1.5);
+    }
+    let tx = x + genome::MAX_CARDS as f32 * (cw + u * 1.5) + u * 2.0;
+    let cards = if chance > 0.0 {
+        format!("{sure} cards  ·  {:.0}% for one more", chance * 100.0)
+    } else {
+        format!("{sure} cards")
+    };
+    let tw = x + w - tx;
+    text(
+        &cards,
+        tx,
+        y + ch * 0.45,
+        fit_px(&cards, tw, px * 0.9),
+        TEXT,
+    );
+    let extra = if f.odds.catalyst {
+        ("one Rare or better is sure".to_string(), rgb(0xFFC56B))
+    } else {
+        (
+            format!(
+                "{:.1}% of cards are morphs",
+                genome::morph_chance(f.odds.morph_mult) * 100.0
+            ),
+            PINK,
+        )
+    };
+    text(
+        &extra.0,
+        tx,
+        y + ch * 1.05,
+        fit_px(&extra.0, tw, px * 0.85),
+        extra.1,
+    );
+
+    // Each keystone's share.
+    y += ch + row * 0.75;
+    if game.keystones.is_empty() {
+        text("No keystones equipped", x, y, px * 0.9, TEXT_DIM);
+        return;
+    }
+    let slot = w / game.keystones.len().max(3) as f32;
+    for (k, &t) in game.keystones.iter().enumerate() {
+        let sx = x + k as f32 * slot;
+        let dormant = game.dormant_reason(t).is_some();
+        let icon = px * 1.3;
+        draw_taxon(
+            sprites,
+            game,
+            t,
+            best_morph(game, t),
+            vec2(sx + icon * 0.5, y - px * 0.35),
+            icon,
+            if dormant { DORMANT } else { WHITE },
+        );
+        let e = keystone_effect(game, t);
+        let c = if dormant { ACCENT_WARN } else { LIME };
+        text(
+            &e,
+            sx + icon + u,
+            y,
+            fit_px(&e, slot - icon - u * 2.0, px * 0.85),
+            c,
+        );
+    }
+}
+
 // --- bottom bar -------------------------------------------------------------------
 
 pub fn bottom_action_rect() -> Rect {
@@ -439,7 +617,14 @@ pub fn bottom_tab_rect(right: bool) -> Rect {
 }
 
 /// `active`: which tab is lit -- `Some(false)` Keystones, `Some(true)` Map.
-pub fn draw_bottom_bar(game: &Game, now: f64, active: Option<bool>, assets: &Assets) {
+/// `choosing`: the wait dial is up, so the button confirms it.
+pub fn draw_bottom_bar(
+    game: &Game,
+    now: f64,
+    active: Option<bool>,
+    choosing: bool,
+    assets: &Assets,
+) {
     let (sw, bar_h) = (screen_width(), render::bar_height());
     let y = screen_height() - bar_h;
     draw_rectangle(0.0, y, sw, bar_h, HUD_BG);
@@ -477,12 +662,27 @@ pub fn draw_bottom_bar(game: &Game, now: f64, active: Option<bool>, assets: &Ass
     let (ey, eh) = (e.y + 5.0, e.h - 10.0);
     let t = get_time() as f32;
     let (label, sub, col, hot) = match game.phase() {
+        Phase::Shape if choosing => {
+            let f = game.forecast();
+            (
+                format!("LET {} RUN", hours_label(game.wait_hours)),
+                format!("{} Ma  ·  {} cards", f.ma, f.odds.cards),
+                ACCENT_OK,
+                true,
+            )
+        }
+        Phase::Shape if game.wait_choosable() => (
+            "LET TIME RUN".to_string(),
+            "choose how long: 2h to 6h".to_string(),
+            ACCENT_OK,
+            true,
+        ),
         Phase::Shape => (
             "LET TIME RUN".to_string(),
             format!(
                 "{}  =  {} Ma",
                 human_duration(game.next_cycle_seconds()),
-                planet::MA_PER_CYCLE
+                game.forecast().ma
             ),
             ACCENT_OK,
             true,
@@ -493,7 +693,7 @@ pub fn draw_bottom_bar(game: &Game, now: f64, active: Option<bool>, assets: &Ass
             TEXT_DIM,
             false,
         ),
-        Phase::Nodule => (
+        Phase::Genome => (
             "EVOLVE IT".to_string(),
             "a new genome is ready".to_string(),
             ACCENT_WARN,
@@ -895,7 +1095,7 @@ pub fn draw_keystones(
 
 // --- an animal's page ------------------------------------------------------------------
 
-pub fn detail_rect() -> Rect {
+fn detail_rect() -> Rect {
     let (sw, sh) = (screen_width(), screen_height());
     Rect::new(sw * 0.06, sh * 0.12, sw * 0.88, sh * 0.76)
 }
@@ -966,19 +1166,16 @@ pub fn draw_detail(game: &Game, taxon: usize, sprites: &Sprites, assets: &Assets
         Some((hab.join(" or "), n.habitats.iter().any(|&h| p.has(h)))),
         (n.oxygen_min > 0).then(|| {
             (
-                format!(
-                    "Oxygen {}%+",
-                    [5, 10, 15, 21, 28, 35][n.oxygen_min as usize]
-                ),
+                format!("Oxygen {}%+", planet::oxygen_percent(n.oxygen_min)),
                 p.oxygen >= n.oxygen_min,
             )
         }),
         (n.temp_min > 0 || n.temp_max < 5).then(|| {
-            let labels = ["Snowball", "Cold", "Cool", "Temperate", "Warm", "Hothouse"];
             (
                 format!(
                     "{} to {}",
-                    labels[n.temp_min as usize], labels[n.temp_max as usize]
+                    planet::temperature_label(n.temp_min),
+                    planet::temperature_label(n.temp_max)
                 ),
                 (n.temp_min..=n.temp_max).contains(&p.temperature),
             )
@@ -1114,19 +1311,11 @@ pub fn draw_boons(game: &Game, sprites: &Sprites, assets: &Assets, hover: Option
         assets.glow(vec2(r.x + r.h * 0.5, r.y + r.h * 0.5), r.h * 0.7, col, 0.3);
         frame(r, rgb(0x0A1020), col, 2.0);
         let ic = vec2(r.x + r.h * 0.5, r.y + r.h * 0.5);
-        let icon = match b {
-            Boon::Lure(_) => 0,
-            Boon::Lens => 1,
-            Boon::Catalyst => 2,
-            Boon::Charm => 3,
-            Boon::Tailwind => 4,
-            Boon::Tectonics => 5,
-        };
         let bob = sprites::Pose {
             y_off: (t * 2.0 + i as f32).sin() * 0.03,
             ..Default::default()
         };
-        sprites::draw_sprite(sprites.boon(icon), ic, r.h * 0.72, bob, WHITE);
+        sprites::draw_sprite(sprites.boon(b.icon()), ic, r.h * 0.72, bob, WHITE);
         if let Boon::Lure(taxon) = b {
             let at = ic + vec2(r.h * 0.26, r.h * 0.24);
             draw_taxon(sprites, game, taxon, Morph::None, at, r.h * 0.4, WHITE);

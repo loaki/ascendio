@@ -75,6 +75,8 @@ pub struct Gesture {
     pub released: bool,
     /// Wheel notches, positive when scrolling up.
     pub wheel: f32,
+    /// Horizontal wheel notches (trackpads), positive when scrolling right.
+    pub wheel_x: f32,
     /// This frame's pinch ratio; 1.0 means none.
     pub pinch: f32,
     pub pinch_anchor: Vec2,
@@ -150,10 +152,14 @@ impl Input {
             self.was_dragging = false;
         }
 
-        let (_, wheel_y) = mouse_wheel();
+        // miniquad reports a scroll to the right as negative x.
+        let (wheel_x, wheel_y) = mouse_wheel();
         if wheel_y != 0.0 {
             g.wheel = wheel_y.signum();
             g.pinch_anchor = pos;
+        }
+        if wheel_x != 0.0 {
+            g.wheel_x = -wheel_x.signum();
         }
 
         g

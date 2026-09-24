@@ -36,7 +36,7 @@ def main():
         "",
         "use macroquad::prelude::*;",
         "",
-        "use crate::nodule::Morph;",
+        "use crate::genome::Morph;",
         "use crate::tree::{Group, Phylogeny};",
         "",
         f"pub const GRID: usize = {GRID};",

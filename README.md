@@ -9,7 +9,7 @@ detonates to find out what evolved, and sometimes it's something rare.
 A session is about two minutes and there are at most four a day. What stops
 you is that the planet needs time, not a paywall.
 
-The full design (every rule, number and all 97 taxa's needs) is in
+The full design (every rule, number and all 151 taxa's needs) is in
 [`docs/DESIGN.md`](docs/DESIGN.md). This README covers how it is built and
 how to run it.
 
@@ -21,9 +21,16 @@ how to run it.
    backdrop changes as you go, and the panel says what the cycle will change
    by itself (forests raise oxygen, volcanoes warm the planet, ice lowers
    the sea).
-2. **Let time run.** The first cycle takes 1 minute, the second 20 minutes,
-   then 6 hours each. The countdown runs on the wall clock, so it keeps
-   going with the app closed. Nothing can be changed until it ends.
+2. **Let time run.** The first cycle takes 1 minute, the second 20 minutes.
+   After that, tapping `LET TIME RUN` raises a dial around the spiral
+   (`src/dial.rs`): swipe or scroll right/left, or use the arrow keys, to pick 2h
+   to 6h in half-hour steps, while the panel shows what the wait and your
+   keystones will bring. Longer waits pay more per hour (`src/wait.rs`):
+   one card per hour, luck that grows with the square of the time, morphs
+   x1.5 from 4h, and at 6h morphs x2 plus a guaranteed Rare. So one 6h wait
+   beats two 3h ones. Each hour is 10 Ma. The countdown runs on the wall
+   clock, so it keeps going with the app closed. Nothing can be changed
+   until it ends.
 3. **Evolve the genome** (`src/opening.rs`). A 3D double helix gives no
    hint of what's inside. Each of three taps mutates a third of its base
    pairs; the third collapses it into a core that detonates like a supernova
@@ -35,7 +42,7 @@ how to run it.
    discovered animals as **keystones**. Only keystones give their bonus, and
    only while the planet suits them: an unsuited one is dormant.
 
-What a genome can hold is filtered twice (`src/nodule.rs`): the tree
+What a genome can hold is filtered twice (`src/genome.rs`): the tree
 (parent found, itself not) and the planet (each taxon's habitat and needs
 in `src/ecology.rs`, e.g. frogs need fresh water, dragonflies need 28% O2).
 Then each card rolls a rarity tier (60/25/11/3.5/0.5%, with pity at 3, 10
@@ -51,7 +58,9 @@ genome) is designed in `docs/DESIGN.md` but not implemented yet.
   your most advanced animal), the planet backdrop, the lineage coil over it,
   the lever panel (a countdown while time runs), and the bottom bar:
   `Keystones` · the action button · `Map`. The action button says
-  `LET TIME RUN`, then the countdown, then `EVOLVE IT`.
+  `LET TIME RUN`, then `LET 4H RUN` once the wait dial is up (the lever
+  panel becomes the rewards panel, with `BACK` to reshape), then the
+  countdown, then `EVOLVE IT`.
 - **Map**: the whole discovered tree as a cladogram. Tap a node for its page.
 - **Animal page**: its needs checked against your planet right now, its
   keystone bonus, level, the morphs you own and how many Ma in it evolved.
@@ -84,7 +93,8 @@ cargo run --release
 | Input | What it does |
 |---|---|
 | `-` / `+` on a lever | Spend or refund a point (shaping phase only) |
-| Bottom action button | Let time run · (countdown) · express the genome |
+| Bottom action button | Let time run (raises the wait dial) · confirm the wait · (countdown) · express the genome |
+| Swipe or scroll right/left, arrow keys | With the wait dial up: longer/shorter wait, 2h to 6h in half-hour steps (the spiral stays still) |
 | Tap the genome / cards | Mutate it, then flip cards; tap again to move on |
 | Tap the focused animal on the coil | Open its page |
 | Tap a branch or ancestor on the coil | Reroute or scroll the lineage to it |
@@ -106,7 +116,7 @@ ASCENDIO_TIME_SCALE=3600 cargo run --release
 ASCENDIO_DEV=1 cargo run --release
 
 # Write a PNG of the framebuffer after N seconds and exit, without touching
-# the real save. ASCENDIO_SHOT_MODE=map|spiral|keystones picks the screen.
+# the real save. ASCENDIO_SHOT_MODE=map|spiral|dial|keystones picks the screen.
 ASCENDIO_SCRATCH=1 ASCENDIO_SHOT=shot.png ASCENDIO_SHOT_AFTER=2 cargo run --release
 
 # Start on a ready genome and tap the opening N times (0.5 s apart), for
@@ -115,9 +125,13 @@ ASCENDIO_SCRATCH=1 ASCENDIO_DEMO_TAPS=6 ASCENDIO_SHOT=open.png ASCENDIO_SHOT_AFT
 
 # Wipe any existing save first -- see what a fresh install sees.
 ASCENDIO_FRESH=1 cargo run --release
+
+# Force the planet's five levers (land,vegetation,oxygen,temperature,volcanism).
+ASCENDIO_SCRATCH=1 ASCENDIO_PLANET=3,4,4,3,0 cargo run --release
 ```
 
-`ASCENDIO_W` / `ASCENDIO_H` override the window size.
+`ASCENDIO_W` / `ASCENDIO_H` override the window size. None of these exist on
+the web build, which always plays with real timing.
 
 ## Play it on your phone (the dev loop)
 
@@ -141,26 +155,23 @@ the phone. `make ip` just prints the URL. Change the port with
 
 ### If the phone times out
 
-Two things bite on this machine, and both were hit the first time:
-
-**1. `ufw` is enabled with `DEFAULT_INPUT_POLICY="DROP"`.** Dropped packets give
-a *timeout* rather than "connection refused", which is the tell. Allow the port
-on the LAN only:
+**1. A firewall dropping the port.** With `ufw` set to drop incoming
+traffic, dropped packets give a *timeout* rather than "connection refused",
+which is the tell. Allow the port on the LAN only:
 
 ```bash
-sudo ufw allow from 192.168.1.0/24 to any port 8082 proto tcp
+sudo ufw allow from 192.168.1.0/24 to any port 8000 proto tcp
 sudo ufw status            # confirm the rule landed
 ```
 
 `make serve` prints this line with your actual subnet and port filled in.
 
-**2. This machine is on the LAN twice** — a USB ethernet dongle
-(`enx…`, 192.168.1.58) and wifi (`wlp0s20f3`, 192.168.1.60). `hostname -I`
-returns them in arbitrary order, along with every docker bridge and the VPN
-tunnel, so it is not a reliable way to pick one. `scripts/lan-ip.sh` asks the
-kernel instead — it takes the source address chosen to reach the default
-gateway, which is by definition on the LAN the phone shares. That is what
-`make ip` and `make serve` print.
+**2. The wrong address.** A machine on the LAN twice (ethernet and wifi),
+or running docker or a VPN, has several addresses, and `hostname -I` lists
+them in arbitrary order. `scripts/lan-ip.sh` asks the kernel instead: it
+takes the source address chosen to reach the default gateway, which is by
+definition on the LAN the phone shares. That is what `make ip` and
+`make serve` print.
 
 The server binds `0.0.0.0`, so either address works once the firewall allows
 it, but prefer the one `make ip` gives.
@@ -172,7 +183,7 @@ What this does and does not tell you:
 | Layout, gestures, game feel | accurate | accurate |
 | Touch, pinch, drag | real touch events | same |
 | Frame pacing / startup time | slower than native | the real numbers |
-| Binary size | 528 KB wasm | measure separately |
+| Binary size | ~820 KB wasm | measure separately |
 
 So iterate on the web build, and use the APK to check performance and size.
 
@@ -228,13 +239,17 @@ src/
 ├── main.rs      loop, screens, input wiring, dev flags
 ├── game.rs      the state machine: shape -> running -> genome -> boon
 ├── planet.rs    the five levers, linked levers, habitats, the cycle timer
+├── wait.rs      the 2h-6h wait and what each length is worth
+├── dial.rs      the wait dial drawn around the spiral
 ├── ecology.rs   every taxon's habitat, needs, rarity tier and keystone bonus
-├── nodule.rs    what a genome can hold: eligibility, tiers, pity, morphs
+├── genome.rs    what a genome can hold: eligibility, tiers, pity, morphs
 ├── opening.rs   the genome's mutate-and-supernova opening (the "pack opening")
+├── genome_bg.rs the abyss and supernova light behind the opening
 ├── backdrop.rs  the pixel-art planet cross-section behind the spiral
+├── pixel.rs     the dithered low-res canvas both backdrops paint into
 ├── ui.rs        HUD, lever panel, bottom bar, keystones, animal page, boons
 ├── render.rs    text helpers, the spiral coil and the map
-├── tree.rs      the 97-taxon table + Phylogeny
+├── tree.rs      the 151-taxon table + Phylogeny
 ├── spiral.rs    the lineage spine, its branch spurs, and the coil's geometry
 ├── layout.rs    tidy left-to-right tree layout for the map
 ├── view.rs      camera (pan/zoom/fit) and gesture recognition
@@ -242,11 +257,11 @@ src/
 ├── facts.rs     "did you know" trivia shown while time runs
 └── save.rs      where the save data actually lives
 docs/
-├── DESIGN.md      the game design: rules, numbers, the 97 taxa
+├── DESIGN.md      the game design: rules, numbers, the 151 taxa
 └── PHYLOGENY.md   sources, citations, and every simplification we made
 ```
 
-The rules (`planet.rs`, `ecology.rs`, `nodule.rs`, `game.rs`) are pure
+The rules (`planet.rs`, `ecology.rs`, `genome.rs`, `game.rs`) are pure
 logic with no drawing and a seedable RNG, and they carry most of the tests:
 every taxon can live on some reachable planet, pity only fires when
 something that rare can drop, a water world never yields a land animal, and
@@ -305,10 +320,11 @@ its README for the workflow.
 The numbers live next to the rules they tune, and all are first guesses
 that need playtesting:
 
-- `planet.rs`: `cycle_seconds` (1 min, 20 min, then 6 h), `BASE_POINTS`, and
+- `wait.rs`: the wait range, `MA_PER_HOUR` and the reward curve in `bonus`.
+- `planet.rs`: `cycle_seconds` (1 min, 20 min, then the chosen wait), `BASE_POINTS`, and
   the linked-lever rules in `Planet::after_cycle`.
 - `ecology.rs`: `TABLE`, every taxon's needs, tier and bonus.
-- `nodule.rs`: the tier weights in `tier_weights`, the pity windows, and the
+- `genome.rs`: the tier weights in `tier_weights`, the pity windows, and the
   morph odds in `roll_morph`.
 - `game.rs`: `LEVEL_STEPS` (specimens per level), keystone slot thresholds,
   and each bonus's per-unit effect in `Game::effects`.
@@ -330,8 +346,8 @@ It autosaves every 3 seconds, on every phase change, and on `Esc`.
 - No leaderboard: the "most advanced animal" (deepest step) is shown in the
   HUD, but nothing is shared between players yet.
 - Android build unverified.
-- `Elephant`/`Whale`/`Wolf` are clade nodes wearing animal names -- see
-  `docs/PHYLOGENY.md`.
+- `Lion` still stands for the whole cat family (Felidae): Tiger, Cat and
+  Sabre-tooth hang from it -- see `docs/PHYLOGENY.md`.
 
 ## Data
 

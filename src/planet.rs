@@ -8,11 +8,9 @@ pub const LEVEL_MAX: u8 = 5;
 pub const VOLCANISM_MAX: u8 = 2;
 /// Points to spend per cycle before keystones.
 pub const BASE_POINTS: u8 = 3;
-pub const MA_PER_CYCLE: u32 = 20;
-
-/// Testing switch: every cycle finishes instantly. Set back to `false`
-/// before shipping.
-pub const NO_WAIT: bool = true;
+/// The first cycles run for a fixed 1 and 20 minutes, to teach the loop;
+/// after them the player picks the wait on the dial.
+pub const TUTORIAL_CYCLES: u32 = 2;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum Lever {
@@ -136,15 +134,6 @@ impl Planet {
         true
     }
 
-    pub fn oxygen_percent(&self) -> u8 {
-        [5, 10, 15, 21, 28, 35][self.oxygen.min(LEVEL_MAX) as usize]
-    }
-
-    pub fn temperature_label(&self) -> &'static str {
-        ["Snowball", "Cold", "Cool", "Temperate", "Warm", "Hothouse"]
-            [self.temperature.min(LEVEL_MAX) as usize]
-    }
-
     pub fn has(&self, h: Habitat) -> bool {
         match h {
             Habitat::Sea => self.land <= 4,
@@ -176,6 +165,15 @@ impl Planet {
     }
 }
 
+/// Atmospheric oxygen at an Oxygen lever level.
+pub fn oxygen_percent(level: u8) -> u8 {
+    [5, 10, 15, 21, 28, 35][level.min(LEVEL_MAX) as usize]
+}
+
+pub fn temperature_label(level: u8) -> &'static str {
+    ["Snowball", "Cold", "Cool", "Temperate", "Warm", "Hothouse"][level.min(LEVEL_MAX) as usize]
+}
+
 /// Wall-clock seconds, so a cycle keeps running while the app is closed.
 #[derive(Clone, Copy, PartialEq, Debug, Serialize, Deserialize)]
 pub struct Cycle {
@@ -183,6 +181,22 @@ pub struct Cycle {
     pub duration: f64,
     /// The planet the genome is rolled against.
     pub launched: Planet,
+    /// The wait the genome is paid for (`wait::bonus`), whatever boons and
+    /// keystones took off `duration`.
+    #[serde(default = "tutorial_hours")]
+    pub hours: f32,
+    /// Millions of years this cycle adds.
+    #[serde(default = "legacy_ma")]
+    pub ma: u32,
+}
+
+fn tutorial_hours() -> f32 {
+    crate::wait::TUTORIAL_HOURS
+}
+
+/// What every cycle was worth before the wait could be chosen.
+fn legacy_ma() -> u32 {
+    20
 }
 
 impl Cycle {
@@ -202,13 +216,13 @@ impl Cycle {
     }
 }
 
-/// Real seconds for the `n`th cycle: short at first to teach the loop, then
-/// 6 hours. `quick` (the keystones' wait cut) is capped at 30%.
-pub fn cycle_seconds(n: u32, quick: f32) -> f64 {
+/// Real seconds for the `n`th cycle: the tutorial ones are short, then the
+/// chosen `hours`. `quick` (the keystones' wait cut) is capped at 30%.
+pub fn cycle_seconds(n: u32, hours: f32, quick: f32) -> f64 {
     let base = match n {
         0 => 60.0,
-        1 => 20.0 * 60.0,
-        _ => 6.0 * 3600.0,
+        n if n < TUTORIAL_CYCLES => 20.0 * 60.0,
+        _ => hours as f64 * 3600.0,
     };
     base * (1.0 - quick.clamp(0.0, 0.3) as f64)
 }
@@ -313,12 +327,13 @@ mod tests {
     }
 
     #[test]
-    fn cycles_ramp_up_then_settle_on_six_hours() {
-        assert_eq!(cycle_seconds(0, 0.0), 60.0);
-        assert_eq!(cycle_seconds(1, 0.0), 1200.0);
-        assert_eq!(cycle_seconds(7, 0.0), 21600.0);
+    fn tutorial_cycles_are_short_then_the_chosen_wait_applies() {
+        assert_eq!(cycle_seconds(0, 6.0, 0.0), 60.0);
+        assert_eq!(cycle_seconds(1, 6.0, 0.0), 1200.0);
+        assert_eq!(cycle_seconds(7, 6.0, 0.0), 21600.0);
+        assert_eq!(cycle_seconds(7, 2.5, 0.0), 9000.0);
         assert!(
-            (cycle_seconds(7, 0.9) - 21600.0 * 0.7).abs() < 0.01,
+            (cycle_seconds(7, 6.0, 0.9) - 21600.0 * 0.7).abs() < 0.01,
             "quick is capped at 30%"
         );
     }
@@ -329,6 +344,8 @@ mod tests {
             started_at: 100.0,
             duration: 50.0,
             launched: Planet::default(),
+            hours: 3.0,
+            ma: 30,
         };
         assert_eq!(c.remaining(120.0), 30.0);
         assert!(!c.is_done(149.0));

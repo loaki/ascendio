@@ -1,15 +1,16 @@
 //! Evolving a new genome, the game's "pack opening": a neutral helix mutated
 //! by three taps, a supernova in the best card's colour (the first hint of
 //! rarity), the cards, a showcase per card, then a summary. Pure
-//! presentation -- `Game::open_nodule` has already applied the results.
+//! presentation -- `Game::open_genome` has already applied the results.
 
 use macroquad::prelude::*;
 
 use crate::ecology::{self, Tier};
 use crate::game::{Game, Opened};
-use crate::genome_bg::{rgb_of, GenomeBg, Rays};
-use crate::nodule::Morph;
-use crate::render::{self, faded, fit_px, rgb, text_centered, TEXT, TEXT_DIM};
+use crate::genome::Morph;
+use crate::genome_bg::{GenomeBg, Rays};
+use crate::pixel::rgb_of;
+use crate::render::{self, faded, fit_px, rgb, text_centered, tier_color, TEXT, TEXT_DIM};
 use crate::sprites::Sprites;
 use crate::ui::{self, Assets, LIME, PINK};
 
@@ -76,10 +77,6 @@ fn ease_out_back(t: f32) -> f32 {
 
 fn ease_out_cubic(t: f32) -> f32 {
     1.0 - (1.0 - t.clamp(0.0, 1.0)).powi(3)
-}
-
-fn tier_col(t: Tier) -> Color {
-    render::tier_color(t)
 }
 
 fn lighten(c: Color, k: f32) -> Color {
@@ -187,11 +184,12 @@ fn card_slot(i: usize, n: usize) -> Vec2 {
 }
 
 impl Opening {
-    pub fn new(tell: Tier, seed: u32) -> Self {
+    /// Opens `game`'s waiting genome; `seed` only varies the effects.
+    pub fn new(game: &Game, seed: u32) -> Self {
         Self {
             stage: Stage::Sealed,
             t: 0.0,
-            tell,
+            tell: game.genome_tell().unwrap_or(Tier::Common),
             taps: 0,
             mut_flash: 0.0,
             boomed: false,
@@ -210,7 +208,7 @@ impl Opening {
         matches!(self.stage, Stage::Summary) && self.t > 99.0
     }
 
-    /// The next tap bursts it: `main` opens the nodule and passes the results.
+    /// The next tap bursts it: `main` opens the genome and passes the results.
     pub fn wants_results(&self) -> bool {
         self.stage == Stage::Sealed && self.taps + 1 >= TAPS_TO_CRACK
     }
@@ -299,7 +297,7 @@ impl Opening {
                         return;
                     }
                     self.flipped[i] = 0.001;
-                    let col = tier_col(self.opened[i].card.tier);
+                    let col = tier_color(self.opened[i].card.tier);
                     self.burst_particles(c, 24, 120.0 * u, &[col, WHITE], 0.0, u * 1.3);
                     self.shake = (1.5 + self.opened[i].card.tier.index() as f32) * u;
                     self.stage = Stage::Showcase(i);
@@ -369,7 +367,7 @@ impl Opening {
                     self.flash = 1.0;
                     self.shake = 16.0 * u * power;
                     let c = genome_center();
-                    let best = tier_col(self.tell);
+                    let best = tier_color(self.tell);
                     let mut cols = vec![WHITE, rgb(0xFFF0C0)];
                     cols.extend(BASES.iter().map(|&h| rgb(h)));
                     let extra = 2 + self.tell.index() * 2;
@@ -398,7 +396,7 @@ impl Opening {
         let (sw, sh) = (screen_width(), screen_height());
         let off = self.shake_offset();
         let t = get_time() as f32;
-        let tell = tier_col(self.tell);
+        let tell = tier_color(self.tell);
         let rays = self.ray_spec();
         self.bg.draw(t, rays.as_ref());
 
@@ -431,7 +429,7 @@ impl Opening {
         match self.stage {
             Stage::Burst if self.t >= BOOM => {
                 let b = self.t - BOOM;
-                let tell = tier_col(self.tell);
+                let tell = tier_color(self.tell);
                 Some(Rays {
                     center: vec2(0.5, 0.44),
                     color: rgb_of(tell),
@@ -441,7 +439,7 @@ impl Opening {
                 })
             }
             Stage::Showcase(i) if self.opened[i].card.new => {
-                let col = tier_col(self.opened[i].card.tier);
+                let col = tier_color(self.opened[i].card.tier);
                 let revealed = self.t >= 1.8;
                 Some(Rays {
                     center: vec2(0.5, 0.36),
@@ -691,7 +689,7 @@ impl Opening {
                         pos.x,
                         pos.y + cs.y * 0.62,
                         u * 5.0,
-                        tier_col(best),
+                        tier_color(best),
                     );
                 }
             }
@@ -722,7 +720,7 @@ impl Opening {
         let taxon = o.card.taxon;
         let tx = game.taxon(taxon);
         let tier = o.card.tier;
-        let col = tier_col(tier);
+        let col = tier_color(tier);
         let c = vec2(sw * 0.5, sh * 0.36) + off;
 
         if !o.card.new {
@@ -963,12 +961,17 @@ impl Opening {
 /// so rarity stays a little ambiguous until the reveal.
 fn draw_card_back(assets: &Assets, c: Vec2, size: Vec2, tier: Tier, i: usize) {
     let t = get_time() as f32;
-    let col = tier_col(tier);
+    let col = tier_color(tier);
     let pulse = 0.5 + 0.5 * (t * 1.6 + i as f32 * 1.7).sin();
     let r = Rect::new(c.x - size.x * 0.5, c.y - size.y * 0.5, size.x, size.y);
 
     draw_rectangle(r.x, r.y, r.w, r.h, rgb(0x050B0E));
-    assets.glow(vec2(c.x, r.y + size.y * 0.32), size.y * 0.7, rgb(0x0B1A20), 0.5);
+    assets.glow(
+        vec2(c.x, r.y + size.y * 0.32),
+        size.y * 0.7,
+        rgb(0x0B1A20),
+        0.5,
+    );
 
     for k in 0..7u32 {
         let seed = (i as u32).wrapping_mul(13).wrapping_add(k.wrapping_mul(37));
@@ -1026,7 +1029,7 @@ fn draw_card_face(
     let sx = (flip * 2.0 - 1.0).abs();
     let size = vec2(size.x * sx.max(0.02), size.y);
     let tier = o.card.tier;
-    let col = tier_col(tier);
+    let col = tier_color(tier);
     let r = Rect::new(c.x - size.x * 0.5, c.y - size.y * 0.5, size.x, size.y);
     if flip < 0.5 {
         draw_rectangle(r.x, r.y, r.w, r.h, rgb(0x050B0E));
