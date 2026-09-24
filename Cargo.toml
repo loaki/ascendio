@@ -29,7 +29,9 @@ opt-level = 1
 # platform in the image; the target SDK is what Play Protect checks, and
 # anything below the newest release gets an "older version of Android" warning.
 [package.metadata.android]
-package_name = "com.ascendio.game"
+# cargo-quad-apk loads the native library named after the last segment, so it
+# must end in the crate name (`.ascendio`) or the app crashes on launch.
+package_name = "com.loaki.ascendio"
 label = "Ascendio"
 build_targets = ["aarch64-linux-android", "armv7-linux-androideabi"]
 target_sdk_version = 36

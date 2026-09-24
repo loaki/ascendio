@@ -14,7 +14,7 @@ fn storage() -> MutexGuard<'static, LocalStorage> {
     {
         static CD: std::sync::Once = std::sync::Once::new();
         CD.call_once(|| {
-            let dir = "/data/data/com.ascendio.game/files";
+            let dir = "/data/data/com.loaki.ascendio/files";
             let _ = std::fs::create_dir_all(dir);
             let _ = std::env::set_current_dir(dir);
         });
