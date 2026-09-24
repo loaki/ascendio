@@ -25,11 +25,15 @@ strip = true
 [profile.dev]
 opt-level = 1
 
-# Used by `cargo quad-apk` / the notfl3/cargo-apk docker image.
+# Used by `cargo quad-apk` (`make apk`). 31 is the newest platform the
+# notfl3/cargo-apk image has.
 [package.metadata.android]
 package_name = "com.ascendio.game"
 label = "Ascendio"
-target_sdk_version = 34
+build_targets = ["aarch64-linux-android", "armv7-linux-androideabi"]
+target_sdk_version = 31
 min_sdk_version = 24
 fullscreen = true
-orientation = "portrait"
+
+[package.metadata.android.activity_attributes]
+"android:screenOrientation" = "portrait"

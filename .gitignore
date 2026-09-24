@@ -3,6 +3,7 @@
 __pycache__/
 *.apk
 *.keystore
+/.android/
 
 # built by `make web`
 web/ascendio.wasm
