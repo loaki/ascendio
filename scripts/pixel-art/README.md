@@ -11,6 +11,7 @@ animation and tests below the marker are hand-written Rust.
 | `render.py` | The "rough ink" renderer: two tones, speckle, chipped edges, grit, worn outline. |
 | `preview.py` | A contact sheet of sprites with their silhouettes, for checking they read. |
 | `gen_rust.py` | Renders every map and writes the data half of `src/sprites.rs`. |
+| `icon.py` | Renders the Android launcher icon (the `Ancestor` glyph) into `android/res/`. |
 
 ## Workflow
 
