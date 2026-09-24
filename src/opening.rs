@@ -958,35 +958,58 @@ impl Opening {
     }
 }
 
+/// A closed bioluminescent shell drifting in the abyss -- the card back
+/// before it's flipped. Tier only shows through the glow, not a hard frame,
+/// so rarity stays a little ambiguous until the reveal.
 fn draw_card_back(assets: &Assets, c: Vec2, size: Vec2, tier: Tier, i: usize) {
     let t = get_time() as f32;
     let col = tier_col(tier);
-    let pulse = 0.5 + 0.5 * (t * 3.0 + i as f32).sin();
-    assets.glow(
-        c,
-        size.y * 0.9,
-        col,
-        0.25 + pulse * 0.2 + tier.index() as f32 * 0.05,
-    );
+    let pulse = 0.5 + 0.5 * (t * 1.6 + i as f32 * 1.7).sin();
     let r = Rect::new(c.x - size.x * 0.5, c.y - size.y * 0.5, size.x, size.y);
-    draw_rectangle(r.x, r.y, r.w, r.h, rgb(0x0A1020));
-    let step = size.x / 6.0;
-    let mut k = -6.0;
-    while k < 12.0 {
-        let x0 = r.x + k * step;
-        draw_line(
-            x0.max(r.x),
-            r.y + (r.x - x0).max(0.0),
-            (x0 + r.h).min(r.x + r.w),
-            r.y + (r.x + r.w - x0).min(r.h),
-            1.0,
-            rgb(0x16233A),
+
+    draw_rectangle(r.x, r.y, r.w, r.h, rgb(0x050B0E));
+    assets.glow(vec2(c.x, r.y + size.y * 0.32), size.y * 0.7, rgb(0x0B1A20), 0.5);
+
+    for k in 0..7u32 {
+        let seed = (i as u32).wrapping_mul(13).wrapping_add(k.wrapping_mul(37));
+        let fx = (seed.wrapping_mul(2_654_435_761) % 1000) as f32 / 1000.0;
+        let fy = ((seed.wrapping_add(7)).wrapping_mul(2_654_435_761) % 1000) as f32 / 1000.0;
+        let s = if k % 3 == 0 { 2.5 } else { 1.5 };
+        let twinkle = 0.5 + 0.5 * (t * 0.6 + k as f32 * 1.3).sin();
+        draw_rectangle(
+            r.x + fx * r.w,
+            r.y + fy * r.h,
+            s,
+            s,
+            faded(rgb(0xC8E6E6), 0.25 + twinkle * 0.2),
         );
-        k += 1.0;
     }
-    draw_rectangle_lines(r.x, r.y, r.w, r.h, 2.5, col);
-    draw_circle_lines(c.x, c.y, size.x * 0.16, 2.0, col);
-    draw_circle(c.x, c.y, size.x * 0.05 * (1.0 + pulse * 0.4), col);
+
+    // The shell: a smooth, gently lopsided oval, not a lumpy blob.
+    let sc = vec2(c.x, c.y - size.y * 0.02);
+    let (sx, sy) = (size.x * 0.34, size.y * 0.3);
+    let n = 48;
+    let ph = i as f32 * 1.9;
+    let mut prev: Option<Vec2> = None;
+    for k in 0..=n {
+        let a = k as f32 / n as f32 * std::f32::consts::TAU;
+        let wob = 1.0 + 0.045 * (a + ph).sin() + 0.02 * (a * 2.0 + ph * 1.3).sin();
+        let p = sc + vec2(a.cos() * sx * wob, a.sin() * sy * wob);
+        if let Some(pp) = prev {
+            draw_line(pp.x, pp.y, p.x, p.y, 1.2, faded(rgb(0xB4DCDC), 0.22));
+        }
+        prev = Some(p);
+    }
+
+    // Bioluminescent core, glowing from within the shell.
+    assets.glow(
+        sc,
+        sy * 0.55,
+        col,
+        0.35 + pulse * 0.25 + tier.index() as f32 * 0.04,
+    );
+
+    draw_rectangle_lines(r.x, r.y, r.w, r.h, 1.0, faded(col, 0.35));
 }
 
 fn draw_card_face(
@@ -1006,8 +1029,8 @@ fn draw_card_face(
     let col = tier_col(tier);
     let r = Rect::new(c.x - size.x * 0.5, c.y - size.y * 0.5, size.x, size.y);
     if flip < 0.5 {
-        draw_rectangle(r.x, r.y, r.w, r.h, rgb(0x0A1020));
-        draw_rectangle_lines(r.x, r.y, r.w, r.h, 2.5, col);
+        draw_rectangle(r.x, r.y, r.w, r.h, rgb(0x050B0E));
+        draw_rectangle_lines(r.x, r.y, r.w, r.h, 1.0, faded(col, 0.35));
         return;
     }
     assets.glow(c, size.y * 0.7, col, 0.18);

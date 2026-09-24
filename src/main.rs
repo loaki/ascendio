@@ -163,7 +163,6 @@ async fn main() {
     let mut cam = Camera::new();
     let mut input = Input::new();
     let mut mode = Mode::Spiral;
-    let mut return_mode = Mode::Spiral;
     let mut keystones = KeystoneView::default();
     let mut detail: Option<usize> = None;
     let mut opening: Option<Opening> = None;
@@ -258,12 +257,11 @@ async fn main() {
 
         if let Some(p) = tap {
             if ui::bottom_tab_rect(false).contains(p) {
-                if mode == Mode::Keystones {
-                    mode = return_mode;
+                mode = if mode == Mode::Keystones {
+                    Mode::Spiral
                 } else {
-                    return_mode = mode;
-                    mode = Mode::Keystones;
-                }
+                    Mode::Keystones
+                };
                 tap = None;
             } else if ui::bottom_tab_rect(true).contains(p) {
                 mode = if mode == Mode::Map {
@@ -283,6 +281,13 @@ async fn main() {
                     }
                     _ => {}
                 }
+                tap = None;
+            } else if mode == Mode::Spiral
+                && game.phase() == Phase::Nodule
+                && ui::panel_rect().contains(p)
+            {
+                let tell = game.nodule_tell().unwrap_or(ecology::Tier::Common);
+                opening = Some(Opening::new(tell, (t_now * 1000.0) as u32));
                 tap = None;
             }
         }

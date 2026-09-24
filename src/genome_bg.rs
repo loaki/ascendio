@@ -129,16 +129,6 @@ impl GenomeBg {
         let mut v = (1.0 - f).powf(1.6) * 0.75;
         let ray = noise(x as f32 * 0.07 + y as f32 * 0.035 + t * 0.08, 3.0).powi(3);
         v += ray * (1.0 - f) * 0.5;
-        let floor = self.h as f32 * 0.9
-            - (x as f32 * 0.06).sin() * 6.0
-            - (x as f32 * 0.17 + 1.0).sin() * 3.0;
-        if y as f32 > floor {
-            return if hash(x >> 1, y >> 1) > 0.5 {
-                [6, 14, 20]
-            } else {
-                [10, 20, 26]
-            };
-        }
         dither(&RAMP, v, x, y)
     }
 
