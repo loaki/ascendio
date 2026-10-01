@@ -341,8 +341,8 @@ impl Game {
     }
 
     /// Whether keystones can be changed: while shaping and while time runs
-    /// (the genome is rolled from them when the cycle ends), not once it's
-    /// ready to open.
+    /// (a running wait keeps the ones it was launched with), not once the
+    /// genome is ready to open.
     pub fn keystones_editable(&self) -> bool {
         matches!(self.phase(), Phase::Shape | Phase::Running)
     }
@@ -376,11 +376,20 @@ impl Game {
             .missing(&self.living_planet())
     }
 
+    /// The keystones that count: those equipped when the running wait was
+    /// launched, else the equipped ones.
+    pub fn active_keystones(&self) -> Vec<usize> {
+        match &self.cycle {
+            Some(c) => c.launched_keystones().collect(),
+            None => self.keystones.clone(),
+        }
+    }
+
     fn keystone_bonuses(&self) -> impl Iterator<Item = (Bonus, f32)> + '_ {
-        self.keystones
-            .iter()
-            .filter(|&&p| self.dormant_reason(p).is_none())
-            .map(|&p| {
+        self.active_keystones()
+            .into_iter()
+            .filter(|&p| self.dormant_reason(p).is_none())
+            .map(|p| {
                 (
                     ecology::of(self.phy.taxa[p].name).bonus,
                     self.keystone_strength(p),
@@ -557,8 +566,21 @@ impl Game {
             launched: self.planet,
             hours,
             ma: wait::ma(hours),
+            keystones: {
+                let mut ks = [None; planet::MAX_KEYSTONES];
+                for (slot, &k) in ks.iter_mut().zip(&self.keystones) {
+                    *slot = Some(k as u16);
+                }
+                ks
+            },
         });
         true
+    }
+
+    /// Gives up the running wait: nothing is produced and the planet stays
+    /// as it was launched, ready to be shaped again.
+    pub fn cancel_cycle(&mut self) -> bool {
+        self.cycle.take().is_some()
     }
 
     /// A finished cycle becomes a genome waiting to be opened.
@@ -877,6 +899,11 @@ mod tests {
         assert!(g.toggle_keystone(1), "unequip");
         g.accelerate(0.0);
         assert!(g.toggle_keystone(5), "still editable while time runs");
+        assert_eq!(
+            g.active_keystones(),
+            vec![2, 3],
+            "the launch snapshot counts"
+        );
         g.skip_cycle(0.0);
         assert_eq!(g.phase(), Phase::Genome);
         assert!(!g.toggle_keystone(5), "locked once the genome is ready");

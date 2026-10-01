@@ -4,7 +4,6 @@
 mod backdrop;
 mod dial;
 mod ecology;
-mod facts;
 mod game;
 mod genome;
 mod genome_bg;
@@ -196,12 +195,13 @@ async fn main() {
     let mut opening: Option<Opening> = None;
     let mut boon_hover: Option<usize> = None;
     let mut pinch_accum = 1.0f32;
-    let mut fact_index = macroquad::rand::gen_range(0, facts::FACTS.len());
     let mut last_phase = game.phase();
     // The wait dial is up (after tapping LET TIME RUN).
     let mut choosing = dev.shot.as_ref().is_some_and(|s| s.dial);
     // Horizontal drag, in pixels, not yet turned into dial steps.
     let mut dial_swipe = 0.0f32;
+    // CANCEL was tapped once while time runs; a second tap gives up the wait.
+    let mut cancel_armed = false;
 
     let mut elapsed = 0.0f32;
     let mut save_timer = 0.0f32;
@@ -215,10 +215,8 @@ async fn main() {
 
         if game.phase() != last_phase {
             last_phase = game.phase();
-            if last_phase == Phase::Running {
-                fact_index = macroquad::rand::gen_range(0, facts::FACTS.len());
-            }
             choosing &= last_phase == Phase::Shape;
+            cancel_armed = false;
             save(&game);
         }
 
@@ -257,6 +255,10 @@ async fn main() {
             }
         }
 
+        // Leaving the spiral drops the time selection: back to LET TIME RUN.
+        if mode != Mode::Spiral {
+            choosing = false;
+        }
         let dial_live = choosing && mode == Mode::Spiral && opening.is_none() && detail.is_none();
         if dial_live {
             let step = wait::STEP_HOURS;
@@ -303,6 +305,23 @@ async fn main() {
         }
 
         if let Some(p) = tap {
+            if game.phase() == Phase::Running
+                && mode == Mode::Spiral
+                && ui::cancel_wait_rect().contains(p)
+            {
+                if cancel_armed {
+                    game.cancel_cycle();
+                    cancel_armed = false;
+                    save(&game);
+                } else {
+                    cancel_armed = true;
+                }
+                tap = None;
+            } else if cancel_armed {
+                cancel_armed = false;
+            }
+        }
+        if let Some(p) = tap {
             if ui::bottom_tab_rect(false).contains(p) {
                 mode = if mode == Mode::Keystones {
                     Mode::Spiral
@@ -322,10 +341,16 @@ async fn main() {
                     Phase::Shape if choosing => {
                         game.accelerate(t_now);
                         choosing = false;
+                        mode = Mode::Spiral;
                     }
-                    Phase::Shape if game.wait_choosable() => choosing = true,
+                    Phase::Shape if game.wait_choosable() => {
+                        // The dial lives on the spiral screen.
+                        mode = Mode::Spiral;
+                        choosing = true;
+                    }
                     Phase::Shape => {
                         game.accelerate(t_now);
+                        mode = Mode::Spiral;
                     }
                     Phase::Genome => {
                         opening = Some(Opening::new(&game, (t_now * 1000.0) as u32));
@@ -512,7 +537,7 @@ async fn main() {
                 if choosing {
                     ui::draw_wait_panel(&game, &sprites);
                 } else {
-                    ui::draw_lever_panel(&game, t_now, &assets, facts::FACTS[fact_index]);
+                    ui::draw_lever_panel(&game, t_now, &assets, &sprites, cancel_armed);
                 }
                 ui::draw_bottom_bar(&game, t_now, None, choosing, &assets);
             }

@@ -270,7 +270,63 @@ fn shape_hint(game: &Game) -> (String, Color) {
     )
 }
 
-pub fn draw_lever_panel(game: &Game, now: f64, assets: &Assets, fact: &str) {
+/// The button that gives up a running wait, in the lever panel's corner.
+pub fn cancel_wait_rect() -> Rect {
+    let r = panel_rect();
+    let (w, h) = (u() * 26.0, u() * 8.0);
+    Rect::new(r.x + r.w - w - u() * 3.0, r.y + u() * 2.5, w, h)
+}
+
+/// `cancel_armed`: the cancel button was tapped once and asks to be confirmed.
+/// The keystones the running wait was launched with and what each adds.
+fn draw_launched_keystones(game: &Game, sprites: &Sprites, r: Rect, px: f32) {
+    let ks = game.active_keystones();
+    let y = r.y + r.h * 0.86;
+    let x = r.x + r.w * 0.04;
+    if ks.is_empty() {
+        text("No keystones were equipped", x, y, px * 0.9, TEXT_DIM);
+        return;
+    }
+    text(
+        "KEYSTONES AT LAUNCH",
+        x,
+        r.y + r.h * 0.72,
+        px * 0.85,
+        TEXT_DIM,
+    );
+    let slot = r.w * 0.92 / ks.len().max(3) as f32;
+    for (k, &t) in ks.iter().enumerate() {
+        let sx = x + k as f32 * slot;
+        let dormant = game.dormant_reason(t).is_some();
+        let icon = px * 1.8;
+        draw_taxon(
+            sprites,
+            game,
+            t,
+            best_morph(game, t),
+            vec2(sx + icon * 0.5, y - px * 0.3),
+            icon,
+            if dormant { DORMANT } else { WHITE },
+        );
+        let e = keystone_effect(game, t);
+        let c = if dormant { ACCENT_WARN } else { LIME };
+        text(
+            &e,
+            sx + icon + u(),
+            y,
+            fit_px(&e, slot - icon - u() * 2.0, px * 0.85),
+            c,
+        );
+    }
+}
+
+pub fn draw_lever_panel(
+    game: &Game,
+    now: f64,
+    assets: &Assets,
+    sprites: &Sprites,
+    cancel_armed: bool,
+) {
     let r = panel_rect();
     let t = get_time() as f32;
     frame(r, faded(rgb(0x05090F), 0.88), rgb(0x1B2C48), 1.5);
@@ -299,16 +355,21 @@ pub fn draw_lever_panel(game: &Game, now: f64, assets: &Assets, fact: &str) {
                 fit_px(&msg, r.w * 0.9, px * 0.9),
                 TEXT_DIM,
             );
-            let lines = wrap_lines(fact, r.w * 0.86, px * 0.95);
-            for (i, line) in lines.iter().take(3).enumerate() {
-                text_centered(
-                    line,
-                    cx,
-                    r.y + r.h * 0.76 + i as f32 * px * 1.3,
-                    px * 0.95,
-                    faded(TEXT, 0.8),
-                );
-            }
+            let b = cancel_wait_rect();
+            let (label, col) = if cancel_armed {
+                ("TAP TO CONFIRM", ACCENT_WARN)
+            } else {
+                ("CANCEL", TEXT_DIM)
+            };
+            frame(b, rgb(0x0A1422), col, 1.5);
+            text_centered(
+                label,
+                b.x + b.w * 0.5,
+                b.y + b.h * 0.75,
+                fit_px(label, b.w * 0.9, b.h * 0.7),
+                col,
+            );
+            draw_launched_keystones(game, sprites, r, px);
         }
         Phase::Genome | Phase::Boon => {
             let cx = r.x + r.w * 0.5;

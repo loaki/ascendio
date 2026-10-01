@@ -188,7 +188,14 @@ pub struct Cycle {
     /// Millions of years this cycle adds.
     #[serde(default = "legacy_ma")]
     pub ma: u32,
+    /// The keystones equipped when the wait was launched; only these count,
+    /// whatever is equipped while time runs.
+    #[serde(default)]
+    pub keystones: [Option<u16>; MAX_KEYSTONES],
 }
+
+/// The most keystone slots there ever are.
+pub const MAX_KEYSTONES: usize = 5;
 
 fn tutorial_hours() -> f32 {
     crate::wait::TUTORIAL_HOURS
@@ -200,6 +207,10 @@ fn legacy_ma() -> u32 {
 }
 
 impl Cycle {
+    pub fn launched_keystones(&self) -> impl Iterator<Item = usize> + '_ {
+        self.keystones.iter().flatten().map(|&k| k as usize)
+    }
+
     pub fn remaining(&self, now: f64) -> f64 {
         (self.started_at + self.duration - now).max(0.0)
     }
@@ -346,6 +357,7 @@ mod tests {
             launched: Planet::default(),
             hours: 3.0,
             ma: 30,
+            keystones: Default::default(),
         };
         assert_eq!(c.remaining(120.0), 30.0);
         assert!(!c.is_done(149.0));
