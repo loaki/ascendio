@@ -1901,14 +1901,21 @@ pub fn draw_detail(game: &Game, taxon: usize, sprites: &Sprites, assets: &Assets
     }
     y += px * 0.6;
     text("AS A KEYSTONE", x, y, px, ACCENT_WARN);
-    for line in wrap_lines(&eco.describe(), r.w * 0.86, px) {
+    // Its bonus is part of the discovery: kept secret until it evolves
+    // (a fossil was found on an earlier Earth, so it's known).
+    if found || game.is_fossil(taxon) {
+        for line in wrap_lines(&eco.describe(), r.w * 0.86, px) {
+            y += px * 1.4;
+            text(&line, x, y, px, LIME);
+        }
+        if let Rule::Catch(c) = eco.rule {
+            y += px * 1.4;
+            let catch = format!("But: {}", c.drawback());
+            text(&catch, x, y, fit_px(&catch, r.w * 0.86, px), LOCK_RED);
+        }
+    } else {
         y += px * 1.4;
-        text(&line, x, y, px, LIME);
-    }
-    if let Rule::Catch(c) = eco.rule {
-        y += px * 1.4;
-        let catch = format!("But: {}", c.drawback());
-        text(&catch, x, y, fit_px(&catch, r.w * 0.86, px), LOCK_RED);
+        text("? ? ?  revealed when it evolves", x, y, px, LOCKED_TEXT);
     }
     if found {
         y += px * 1.6;
