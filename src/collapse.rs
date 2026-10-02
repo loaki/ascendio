@@ -11,9 +11,11 @@ use macroquad::prelude::*;
 use crate::game;
 use crate::pixel::{self, bayer, hash};
 use crate::planet::Planet;
-use crate::render::{faded, fit_px, rgb, text_centered, TEXT, TEXT_DIM};
+use crate::render::{
+    self, faded, fit_px, rgb, text_centered, CYAN, LIME, LOCK_RED, RAD_COLOR, TEXT, TEXT_DIM,
+};
 use crate::spiral;
-use crate::ui::{self, RAD_COLOR};
+use crate::ui;
 
 /// Real seconds per second of the timeline below: above 1 plays it slower.
 const PACE: f32 = 1.4;
@@ -33,9 +35,6 @@ const RESET: f32 = 5.4;
 const FRESH: f32 = 6.0;
 /// Taps close it from here.
 const READY: f32 = 6.5;
-
-const RED: Color = rgb(0xFF6A4A);
-const COIL: Color = rgb(0x6FF5E1);
 
 /// The flash's dithered white, on the backdrop's low-res grid.
 struct Layer {
@@ -65,8 +64,16 @@ impl Collapse {
     /// White on `cover` (0..1) of the screen, dithered like the backdrop:
     /// painted once per 12 fps step, then drawn scaled up.
     fn draw_white(&mut self, cover: f32, step: i32) {
-        let u = ui::u();
+        let u = render::u();
         let (w, h) = (pixel::W, (screen_height() / u).ceil() as usize);
+        // The window changed shape: the old layer no longer covers it.
+        if self
+            .layer
+            .as_ref()
+            .is_some_and(|l| l.img.height as usize != h)
+        {
+            self.layer = None;
+        }
         let layer = self.layer.get_or_insert_with(|| {
             let img = Image::gen_image_color(w as u16, h as u16, Color::new(0.0, 0.0, 0.0, 0.0));
             let tex = Texture2D::from_image(&img);
@@ -138,7 +145,7 @@ impl Collapse {
 
     /// Over everything else. `rad` and `fossils` are the new Earth's.
     pub fn draw(&mut self, rad: u32, fossils: usize) {
-        let (sw, sh, u) = (screen_width(), screen_height(), ui::u());
+        let (sw, sh, u) = (screen_width(), screen_height(), render::u());
         // Stepped time: the motion moves in 12 fps frames.
         let t = (self.t * FPS * PACE).floor() / (FPS * PACE);
         let jolt = |k: i32| {
@@ -161,7 +168,7 @@ impl Collapse {
             }
             if t >= 0.15 {
                 let p = vec2(sw * 0.5, mid) + jolt(1);
-                text_centered("1 IN 5", p.x, p.y, u * 22.0, RED);
+                text_centered("1 IN 5", p.x, p.y, u * 22.0, LOCK_RED);
             }
         } else if t < FLASH {
             // The flash: solid white, then dithering away to the frozen Earth.
@@ -219,7 +226,7 @@ impl Collapse {
                     c.x + a1.cos() * r,
                     c.y + a1.sin() * r,
                     u * 2.0,
-                    COIL,
+                    CYAN,
                 );
             }
         } else {
@@ -234,8 +241,8 @@ impl Collapse {
 
 /// NEW EARTH, the radiation it brings, and what waits to be found again.
 fn draw_banner(age: f32, rad: u32, fossils: usize, ready: bool) {
-    let (sw, sh, u) = (screen_width(), screen_height(), ui::u());
-    let pop = match (age * 12.0) as i32 {
+    let (sw, sh, u) = (screen_width(), screen_height(), render::u());
+    let pop = match (age * FPS * PACE) as i32 {
         0 => 0.6,
         1 => 0.85,
         2 => 1.08,
@@ -267,7 +274,7 @@ fn draw_banner(age: f32, rad: u32, fossils: usize, ready: bool) {
         cx,
         r.y + u * 41.0,
         fit_px(&perks, r.w * 0.9, u * 6.5),
-        ui::LIME,
+        LIME,
     );
     let f = format!("{fossils} fossils to find again");
     text_centered(&f, cx, r.y + u * 50.0, u * 5.5, TEXT_DIM);

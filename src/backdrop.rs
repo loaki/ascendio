@@ -61,6 +61,22 @@ fn table(v: f32, t: &[f32]) -> f32 {
     t[i] + (t[j] - t[i]) * (v - i as f32)
 }
 
+/// What the passes of one `Backdrop::paint` share.
+struct Scene {
+    /// Canvas height, and the scale of the 320-high design.
+    h: i32,
+    sc: f32,
+    /// The waterline's row.
+    wy: i32,
+    /// Per column, the top row of each ridge, far to near.
+    tops: Vec<[i32; 3]>,
+    veg_level: usize,
+    cold: bool,
+    /// Volcanism, and the half-width of the cone at `VOLCANO_X`.
+    vol: f32,
+    vw: i32,
+}
+
 impl Backdrop {
     pub fn new() -> Self {
         Self {
@@ -164,6 +180,20 @@ impl Backdrop {
     }
 
     fn paint(&mut self, s: &Shown, t: f32, calm: f32) {
+        let scene = self.scene(s);
+        self.paint_ground(s, &scene, t);
+        self.paint_surface(s, &scene, t);
+        self.paint_trees(&scene);
+        self.paint_volcano(&scene, calm);
+        self.paint_sky(s, &scene, t);
+        self.paint_kelp(s, &scene, t);
+        self.paint_marine_snow(s, &scene, t);
+        self.paint_vignette(&scene);
+    }
+
+    /// The layout every pass paints against: the waterline and the ridge
+    /// tops, the volcano carved into the far one.
+    fn scene(&self, s: &Shown) -> Scene {
         let h = self.canvas.h as i32;
         let sc = h as f32 / 320.0;
         let wy = (table(s.land, &WATER) * h as f32).round() as i32;
@@ -171,8 +201,6 @@ impl Backdrop {
         let bases = [26.0, 48.0, 70.0].map(|b| wy as f32 + b * sc - rise);
         let offs = [0usize, 90, 200];
 
-        let sky = sky_palette(s);
-        let wat = water_palette(s);
         let veg_level = s.veg.round().clamp(0.0, 5.0) as usize;
         let cold = s.temp < 1.5;
         let mut tops: Vec<[i32; 3]> = (0..W)
@@ -203,8 +231,35 @@ impl Backdrop {
                 tops[x as usize][0] = base.min((base as f32 - bump).round() as i32);
             }
         }
-        let on_volcano = |x: i32| vol > 0.3 && (x - vx).abs() < vw;
+        Scene {
+            h,
+            sc,
+            wy,
+            tops,
+            veg_level,
+            cold,
+            vol,
+            vw,
+        }
+    }
 
+    /// Rock, ridges and vegetation above the water, the sea and its light below.
+    fn paint_ground(&mut self, s: &Shown, scene: &Scene, t: f32) {
+        let Scene {
+            h,
+            sc,
+            wy,
+            veg_level,
+            cold,
+            vol,
+            vw,
+            ..
+        } = *scene;
+        let tops = &scene.tops;
+        let vx = VOLCANO_X;
+        let sky = sky_palette(s);
+        let wat = water_palette(s);
+        let on_volcano = |x: i32| vol > 0.3 && (x - vx).abs() < vw;
         for y in 0..h {
             for x in 0..W as i32 {
                 let b = bayer(x, y);
@@ -275,8 +330,12 @@ impl Backdrop {
                 self.canvas.put(x, y, c);
             }
         }
+    }
 
-        // The water surface, where it isn't land.
+    /// The water surface, where it isn't land; ice when frozen.
+    fn paint_surface(&mut self, s: &Shown, scene: &Scene, t: f32) {
+        let Scene { h, wy, .. } = *scene;
+        let tops = &scene.tops;
         if wy > 0 && wy < h {
             for x in 0..W as i32 {
                 if tops[x as usize].iter().any(|&tp| tp <= wy) {
@@ -307,7 +366,17 @@ impl Backdrop {
                 }
             }
         }
+    }
 
+    /// Trees along the near ridges, once there is forest.
+    fn paint_trees(&mut self, scene: &Scene) {
+        let Scene {
+            wy,
+            veg_level,
+            cold,
+            ..
+        } = *scene;
+        let tops = &scene.tops;
         if veg_level >= 3 && !cold {
             let step = match veg_level {
                 5 => 3,
@@ -335,8 +404,13 @@ impl Backdrop {
                 }
             }
         }
+    }
 
-        // Crater glow and smoke; lava and bombs when violent; bubbles if submerged.
+    /// Crater glow and smoke; lava and bombs when violent; bubbles if submerged.
+    fn paint_volcano(&mut self, scene: &Scene, calm: f32) {
+        let Scene { sc, wy, vol, .. } = *scene;
+        let tops = &scene.tops;
+        let vx = VOLCANO_X;
         if vol > 0.3 {
             let cy = tops[vx as usize][0];
             if cy < wy {
@@ -407,7 +481,11 @@ impl Backdrop {
                 self.glow(vx as f32, cy as f32, 8.0, [255, 106, 40], 0.3);
             }
         }
+    }
 
+    /// The sun and the clouds, while the sky shows.
+    fn paint_sky(&mut self, s: &Shown, scene: &Scene, t: f32) {
+        let Scene { sc, wy, cold, .. } = *scene;
         if wy > (30.0 * sc) as i32 {
             let sy = ((wy as f32 - 30.0 * sc).min(40.0 * sc)) as i32;
             let hot = s.volc >= 1.5;
@@ -453,7 +531,14 @@ impl Backdrop {
                 }
             }
         }
+    }
 
+    /// Kelp swaying on the deep ridge.
+    fn paint_kelp(&mut self, s: &Shown, scene: &Scene, t: f32) {
+        let Scene {
+            sc, wy, veg_level, ..
+        } = *scene;
+        let tops = &scene.tops;
         if s.temp >= 0.5 {
             for k in 0..(10 + veg_level * 2) {
                 let x0 = hash(k as i32, 51) * W as f32;
@@ -473,8 +558,11 @@ impl Backdrop {
                 }
             }
         }
+    }
 
-        // Marine snow, brighter with more oxygen.
+    /// Marine snow, brighter with more oxygen.
+    fn paint_marine_snow(&mut self, s: &Shown, scene: &Scene, t: f32) {
+        let Scene { h, wy, .. } = *scene;
         for k in 0..60 {
             let x = hash(k, 7) * W as f32;
             let speed = 3.0 + hash(k, 9) * 6.0;
@@ -488,8 +576,11 @@ impl Backdrop {
                 self.canvas.put(x as i32, y, c);
             }
         }
+    }
 
-        // Vignette, so the UI reads on top.
+    /// Vignette, so the UI reads on top.
+    fn paint_vignette(&mut self, scene: &Scene) {
+        let Scene { h, .. } = *scene;
         for y in 0..h {
             for x in 0..W as i32 {
                 let rx = (x as f32 - W as f32 * 0.5) / (W as f32 * 0.62);

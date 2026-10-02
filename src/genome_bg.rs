@@ -7,6 +7,7 @@ use std::f32::consts::{PI, TAU};
 use macroquad::prelude::*;
 
 use crate::pixel::{bayer, hash, mix, Canvas, Rgb, W};
+use crate::render::ease_out_cubic;
 
 fn noise(x: f32, y: f32) -> f32 {
     let (xi, yi) = (x.floor() as i32, y.floor() as i32);
@@ -52,6 +53,9 @@ impl GenomeBg {
     }
 
     pub fn draw(&mut self, t: f32, rays: Option<&Rays>) {
+        if !self.canvas.fits_screen() {
+            self.canvas = Canvas::new();
+        }
         for y in 0..self.canvas.h as i32 {
             for x in 0..W as i32 {
                 let mut c = self.abyss(x, y, t);
@@ -122,7 +126,7 @@ impl GenomeBg {
             // Three shockwaves.
             for k in 0..3 {
                 let rk = ((age - k as f32 * 0.12) / 0.9).clamp(0.0, 1.0);
-                let radius = W as f32 * 1.1 * (1.0 - (1.0 - rk).powi(3));
+                let radius = W as f32 * 1.1 * ease_out_cubic(rk);
                 let width = 1.0 + (1.0 - rk) * 2.0;
                 if rk > 0.0 && rk < 1.0 && (d - radius).abs() < width {
                     i += 2.2 * (1.0 - rk);

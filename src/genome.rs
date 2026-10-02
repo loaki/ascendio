@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::ecology::{self, Tier};
+use crate::ecology::Tier;
 use crate::planet::Planet;
 use crate::tree::Phylogeny;
 
@@ -45,6 +45,28 @@ pub enum Morph {
 }
 
 impl Morph {
+    /// Every real morph, rarest last.
+    pub const ALL: [Morph; 4] = [Morph::Giant, Morph::Albino, Morph::Melanistic, Morph::Amber];
+
+    /// Its flag in a taxon's owned-morphs byte (`Game::morphs`); 0 for none.
+    pub fn bit(self) -> u8 {
+        match self {
+            Morph::None => 0,
+            Morph::Giant => 1,
+            Morph::Albino => 2,
+            Morph::Melanistic => 4,
+            Morph::Amber => 8,
+        }
+    }
+
+    /// The morph a single flag stands for, `None` for anything else.
+    pub fn from_bit(bit: u8) -> Morph {
+        Self::ALL
+            .into_iter()
+            .find(|m| m.bit() == bit)
+            .unwrap_or(Morph::None)
+    }
+
     pub fn name(self) -> &'static str {
         match self {
             Morph::None => "",
@@ -178,7 +200,7 @@ pub fn eligible(phy: &Phylogeny, found: &[bool], planet: &Planet) -> Vec<usize> 
     (0..phy.len())
         .filter(|&i| !found[i])
         .filter(|&i| phy.taxa[i].parent.is_some_and(|p| found[p]))
-        .filter(|&i| ecology::of(phy.taxa[i].name).needs.met_by(planet))
+        .filter(|&i| phy.taxa[i].eco.needs.met_by(planet))
         .collect()
 }
 
@@ -187,7 +209,7 @@ pub fn blocked_hint(phy: &Phylogeny, found: &[bool], planet: &Planet) -> Option<
     (0..phy.len())
         .filter(|&i| !found[i] && phy.taxa[i].parent.is_some_and(|p| found[p]))
         .find_map(|i| {
-            let why = ecology::of(phy.taxa[i].name).needs.missing(planet)?;
+            let why = phy.taxa[i].eco.needs.missing(planet)?;
             Some(format!("Something is waiting to evolve: it {why}."))
         })
 }
@@ -221,7 +243,7 @@ fn roll_tier(rng: &mut Rng, luck: f32) -> Tier {
 /// How likely `taxon` is against the others of its tier: its best habitat's
 /// share of the planet, times the keystones' affinity for that habitat.
 fn weight(phy: &Phylogeny, taxon: usize, planet: &Planet, odds: &Odds) -> f32 {
-    let eco = ecology::of(phy.taxa[taxon].name);
+    let eco = phy.taxa[taxon].eco;
     let shares = planet.habitat_shares();
     let aff = eco
         .needs
@@ -249,7 +271,7 @@ fn pick(
     let at = |t: Tier| -> Vec<usize> {
         pool.iter()
             .copied()
-            .filter(|&i| ecology::of(phy.taxa[i].name).tier == t)
+            .filter(|&i| phy.taxa[i].eco.tier == t)
             .collect()
     };
     let order: Vec<Tier> = Tier::ALL
@@ -325,7 +347,7 @@ fn roll_morph(
 
 fn specimen(phy: &Phylogeny, found: &[bool], planet: &Planet, rng: &mut Rng) -> usize {
     let living: Vec<usize> = (0..phy.len())
-        .filter(|&i| found[i] && ecology::of(phy.taxa[i].name).needs.met_by(planet))
+        .filter(|&i| found[i] && phy.taxa[i].eco.needs.met_by(planet))
         .collect();
     let owned: Vec<usize> = (0..phy.len()).filter(|&i| found[i]).collect();
     let from = if living.is_empty() { &owned } else { &living };
@@ -374,11 +396,7 @@ pub fn roll(
         let pool = eligible(phy, &seen, planet);
         // Only lift the roll if something that rare can drop; otherwise the
         // pity keeps waiting.
-        if tier < floor
-            && pool
-                .iter()
-                .any(|&i| ecology::of(phy.taxa[i].name).tier >= floor)
-        {
+        if tier < floor && pool.iter().any(|&i| phy.taxa[i].eco.tier >= floor) {
             tier = floor;
         }
 
@@ -387,7 +405,7 @@ pub fn roll(
                 seen[i] = true;
                 Card {
                     taxon: i,
-                    tier: ecology::of(phy.taxa[i].name).tier,
+                    tier: phy.taxa[i].eco.tier,
                     morph: Morph::None,
                     new: true,
                     note: None,
@@ -397,7 +415,7 @@ pub fn roll(
                 let i = specimen(phy, &seen, planet, rng);
                 Card {
                     taxon: i,
-                    tier: ecology::of(phy.taxa[i].name).tier,
+                    tier: phy.taxa[i].eco.tier,
                     morph: Morph::None,
                     new: false,
                     note: blocked_hint(phy, &seen, planet)
@@ -521,11 +539,7 @@ mod tests {
                         "{} skipped its parent",
                         t.name
                     );
-                    assert!(
-                        ecology::of(t.name).needs.met_by(&planet),
-                        "{} can't live here",
-                        t.name
-                    );
+                    assert!(t.eco.needs.met_by(&planet), "{} can't live here", t.name);
                 }
             }
             for c in &cards {

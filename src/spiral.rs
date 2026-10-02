@@ -373,13 +373,13 @@ impl Frame {
     pub fn hit(&self, p: Vec2) -> Option<usize> {
         // Spurs sit on top of the coil, so they win ties.
         let mut spurs: Vec<&Spur> = self.spurs.iter().collect();
-        spurs.sort_by(|a, b| a.d.abs().partial_cmp(&b.d.abs()).unwrap());
+        spurs.sort_by(|a, b| a.d.abs().total_cmp(&b.d.abs()));
         if let Some(s) = spurs.into_iter().find(|s| inside(p, s.pos, s.half)) {
             return Some(s.taxon);
         }
 
         let mut beads: Vec<&Bead> = self.beads.iter().collect();
-        beads.sort_by(|a, b| a.d.abs().partial_cmp(&b.d.abs()).unwrap());
+        beads.sort_by(|a, b| a.d.abs().total_cmp(&b.d.abs()));
         beads
             .into_iter()
             .find(|b| inside(p, b.pos, b.half))

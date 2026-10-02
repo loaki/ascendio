@@ -1,5 +1,6 @@
 //! Shared drawing helpers, the spiral and the map.
 
+use macroquad::miniquad::{BlendFactor, BlendState, BlendValue, Equation, PipelineParams};
 use macroquad::prelude::*;
 
 use crate::ecology;
@@ -21,12 +22,23 @@ pub const PANEL_LOCKED: Color = rgb(0x11151B);
 pub const EDGE: Color = rgb(0x2A323D);
 pub const TEXT: Color = rgb(0xE6EAF0);
 pub const TEXT_DIM: Color = rgb(0x97A3B5);
-const LOCKED_BORDER: Color = rgb(0x3E4857);
+pub const LOCKED_BORDER: Color = rgb(0x3E4857);
 pub const LOCKED_TEXT: Color = rgb(0x5A6678);
 pub const ACCENT_OK: Color = rgb(0x5CC26B);
 pub const ACCENT_DNA: Color = rgb(0x5BC8F5);
 pub const ACCENT_WARN: Color = rgb(0xE8A33D);
 pub const TRACK: Color = rgb(0x20272F);
+pub const CYAN: Color = rgb(0x6FF5E1);
+pub const GOLD: Color = rgb(0xFFC56B);
+pub const PINK: Color = rgb(0xFF7AB8);
+pub const LIME: Color = rgb(0xC5F76A);
+/// A keystone's drawback, a lever it holds, the end of the Earth.
+pub const LOCK_RED: Color = rgb(0xFF6A4A);
+/// Radiation: the RAD badge and the new Earth.
+pub const RAD_COLOR: Color = rgb(0xD4F542);
+/// Multiply tint for a fossil: an animal found on an earlier Earth.
+pub const STONE: Color = Color::new(0.58, 0.53, 0.46, 1.0);
+pub const STONE_TEXT: Color = rgb(0x9A9182);
 /// Multiply tint for an undiscovered species' sprite.
 pub const SILHOUETTE: Color = Color::new(0.09, 0.09, 0.11, 1.0);
 pub const HUD_BG: Color = Color::new(0.055, 0.067, 0.086, 0.92);
@@ -45,6 +57,18 @@ pub fn faded(c: Color, a: f32) -> Color {
         a: c.a * a.clamp(0.0, 1.0),
         ..c
     }
+}
+
+/// Overshoots a little, then settles: a pop.
+pub fn ease_out_back(t: f32) -> f32 {
+    const C1: f32 = 1.70158;
+    const C3: f32 = C1 + 1.0;
+    1.0 + C3 * (t - 1.0).powi(3) + C1 * (t - 1.0).powi(2)
+}
+
+/// Fast, then slowing to a stop.
+pub fn ease_out_cubic(t: f32) -> f32 {
+    1.0 - (1.0 - t.clamp(0.0, 1.0)).powi(3)
 }
 
 // --- text -------------------------------------------------------------------
@@ -80,7 +104,7 @@ pub fn draw_spiral(game: &Game, frame: &Frame, t: f32, last: f32, sprites: &Spri
 
     // Far to near, so the focus bead lands on top.
     let mut beads: Vec<&Bead> = frame.beads.iter().collect();
-    beads.sort_by(|a, b| b.d.abs().partial_cmp(&a.d.abs()).unwrap());
+    beads.sort_by(|a, b| b.d.abs().total_cmp(&a.d.abs()));
     for bead in beads {
         draw_bead(game, frame, bead, sprites);
     }
@@ -103,7 +127,19 @@ fn accent_of(game: &Game, taxon: usize) -> Color {
     if !game.unlocked[taxon] {
         return LOCKED_BORDER;
     }
-    tier_color(ecology::of(game.taxon(taxon).name).tier)
+    tier_color(game.taxon(taxon).eco.tier)
+}
+
+/// Multiply tint for a taxon's sprite: in colour once found, stone for a
+/// fossil, a silhouette before.
+pub fn taxon_tint(game: &Game, taxon: usize) -> Color {
+    if game.unlocked[taxon] {
+        WHITE
+    } else if game.is_fossil(taxon) {
+        STONE
+    } else {
+        SILHOUETTE
+    }
 }
 
 pub fn tier_color(tier: ecology::Tier) -> Color {
@@ -151,16 +187,7 @@ fn draw_chip(game: &Game, sprites: &Sprites, c: Chip) {
     let group = game.taxon(c.taxon).group;
     let anim = sprites::pose(group, c.taxon, get_time());
     let fossil = game.is_fossil(c.taxon);
-    let tint = faded(
-        if c.unlocked {
-            WHITE
-        } else if fossil {
-            crate::ui::STONE
-        } else {
-            SILHOUETTE
-        },
-        c.fade,
-    );
+    let tint = faded(taxon_tint(game, c.taxon), c.fade);
     sprites::draw_sprite(sprites.get(c.taxon), icon_center, icon, anim, tint);
 
     let text_x0 = x + h * 0.14 + icon + h * 0.10;
@@ -174,7 +201,7 @@ fn draw_chip(game: &Game, sprites: &Sprites, c: Chip) {
             if c.unlocked {
                 TEXT
             } else if fossil {
-                crate::ui::STONE_TEXT
+                STONE_TEXT
             } else {
                 LOCKED_TEXT
             },
@@ -329,14 +356,7 @@ fn draw_nodes(game: &Game, layout: &Layout, cam: &Camera, sprites: &Sprites) {
         let icon_center = Vec2::new(x + h * 0.20 + icon * 0.5, center.y);
         let anim = sprites::pose(game.taxon(i).group, i, get_time());
         let fossil = game.is_fossil(i);
-        let tint = if found {
-            WHITE
-        } else if fossil {
-            crate::ui::STONE
-        } else {
-            SILHOUETTE
-        };
-        sprites::draw_sprite(sprites.get(i), icon_center, icon, anim, tint);
+        sprites::draw_sprite(sprites.get(i), icon_center, icon, anim, taxon_tint(game, i));
 
         let text_x0 = x + h * 0.20 + icon + h * 0.12;
         let text_w = (x + w - h * 0.15 - text_x0).max(1.0);
@@ -370,7 +390,7 @@ fn draw_nodes(game: &Game, layout: &Layout, cam: &Camera, sprites: &Sprites) {
                 text_x0,
                 center.y + name_px * 0.35,
                 fit_px(name, text_w, name_px),
-                crate::ui::STONE_TEXT,
+                STONE_TEXT,
             );
         } else {
             text_centered(
@@ -386,8 +406,13 @@ fn draw_nodes(game: &Game, layout: &Layout, cam: &Camera, sprites: &Sprites) {
 
 // --- shared chrome ----------------------------------------------------------
 
+/// One design pixel: the UI sits on the backdrop's 180-wide grid.
+pub fn u() -> f32 {
+    screen_width() / crate::pixel::W as f32
+}
+
 pub fn bar_height() -> f32 {
-    let u = screen_width() / 180.0;
+    let u = u();
     (screen_height() * 0.085).clamp(u * 21.0, u * 35.0)
 }
 
@@ -412,4 +437,83 @@ pub fn wrap_lines(s: &str, max_w: f32, px: f32) -> Vec<String> {
         lines.push(current);
     }
     lines
+}
+
+// --- brightness -------------------------------------------------------------
+
+const BRIGHTEN_VERTEX: &str = r#"#version 100
+attribute vec3 position;
+attribute vec2 texcoord;
+attribute vec4 color0;
+
+varying lowp vec2 uv;
+varying lowp vec4 color;
+
+uniform mat4 Model;
+uniform mat4 Projection;
+
+void main() {
+    gl_Position = Projection * Model * vec4(position, 1);
+    color = color0 / 255.0;
+    uv = texcoord;
+}"#;
+
+const BRIGHTEN_FRAGMENT: &str = r#"#version 100
+varying lowp vec4 color;
+varying lowp vec2 uv;
+
+uniform sampler2D Texture;
+
+void main() {
+    gl_FragColor = color * texture2D(Texture, uv);
+}"#;
+
+/// The brightness setting, applied over the finished frame: a dark veil to
+/// dim, and to brighten a blend that scales what is already drawn
+/// (`dst * (1 + k)`), so colours get brighter rather than washed out.
+pub struct Brightness {
+    /// `None` if the GPU refused the shader: the game then only dims.
+    brighten: Option<Material>,
+}
+
+impl Brightness {
+    pub fn new() -> Self {
+        let brighten = load_material(
+            ShaderSource::Glsl {
+                vertex: BRIGHTEN_VERTEX,
+                fragment: BRIGHTEN_FRAGMENT,
+            },
+            MaterialParams {
+                pipeline_params: PipelineParams {
+                    color_blend: Some(BlendState::new(
+                        Equation::Add,
+                        BlendFactor::Value(BlendValue::DestinationColor),
+                        BlendFactor::One,
+                    )),
+                    alpha_blend: Some(BlendState::new(
+                        Equation::Add,
+                        BlendFactor::Zero,
+                        BlendFactor::One,
+                    )),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        )
+        .ok();
+        Self { brighten }
+    }
+
+    /// `percent` of the normal brightness; 100 leaves the frame alone.
+    pub fn apply(&self, percent: u8) {
+        let (sw, sh) = (screen_width(), screen_height());
+        let k = (percent as f32 - 100.0) / 100.0;
+        if k < 0.0 {
+            draw_rectangle(0.0, 0.0, sw, sh, Color::new(0.0, 0.0, 0.0, -k));
+        } else if let (true, Some(m)) = (k > 0.0, &self.brighten) {
+            gl_use_material(m);
+            draw_rectangle(0.0, 0.0, sw, sh, Color::new(k, k, k, 1.0));
+            gl_use_default_material();
+        }
+    }
 }

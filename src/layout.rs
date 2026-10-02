@@ -172,7 +172,7 @@ mod tests {
                 .filter(|&i| game.taxon(i).depth == depth)
                 .filter_map(|i| layout.get(i))
                 .collect();
-            column.sort_by(|a, b| a.center.y.partial_cmp(&b.center.y).unwrap());
+            column.sort_by(|a, b| a.center.y.total_cmp(&b.center.y));
             for pair in column.windows(2) {
                 let gap =
                     (pair[1].center.y - pair[1].h * 0.5) - (pair[0].center.y + pair[0].h * 0.5);

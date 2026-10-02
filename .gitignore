@@ -10,4 +10,4 @@ web/ascendio.wasm
 
 # quad-storage's native save backend (the real save lives here when running
 # natively; wasm uses the browser's localStorage instead)
-local.data
+local.data*

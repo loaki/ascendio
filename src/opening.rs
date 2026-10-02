@@ -5,14 +5,17 @@
 
 use macroquad::prelude::*;
 
-use crate::ecology::{self, Tier};
+use crate::ecology::Tier;
 use crate::game::{Game, Opened};
 use crate::genome::Morph;
 use crate::genome_bg::{GenomeBg, Rays};
 use crate::pixel::rgb_of;
-use crate::render::{self, faded, fit_px, rgb, text_centered, tier_color, TEXT, TEXT_DIM};
+use crate::render::{
+    self, ease_out_back, ease_out_cubic, faded, fit_px, rgb, text_centered, tier_color, CYAN, LIME,
+    PINK, TEXT, TEXT_DIM,
+};
 use crate::sprites::Sprites;
-use crate::ui::{self, Assets, LIME, PINK};
+use crate::ui::{self, Assets};
 
 const TAPS_TO_CRACK: u32 = 3;
 const PRISM: [u32; 6] = [0xFF7AB8, 0xFFC56B, 0xC5F76A, 0x6FF5E1, 0x5AA8FF, 0xC07BFF];
@@ -52,6 +55,8 @@ pub struct Opening {
     /// Counts down after each tap: the glitch and the MUTATION! slam.
     mut_flash: f32,
     boomed: bool,
+    /// The current card's reveal flash has fired (once, however it got there).
+    reveal_fired: bool,
     shake: f32,
     freeze: f32,
     flash: f32,
@@ -69,16 +74,6 @@ fn rnd(seed: &mut u32) -> f32 {
     (*seed as f32) / u32::MAX as f32
 }
 
-fn ease_out_back(t: f32) -> f32 {
-    const C1: f32 = 1.70158;
-    const C3: f32 = C1 + 1.0;
-    1.0 + C3 * (t - 1.0).powi(3) + C1 * (t - 1.0).powi(2)
-}
-
-fn ease_out_cubic(t: f32) -> f32 {
-    1.0 - (1.0 - t.clamp(0.0, 1.0)).powi(3)
-}
-
 fn lighten(c: Color, k: f32) -> Color {
     Color::new(
         c.r + (1.0 - c.r) * k,
@@ -93,7 +88,7 @@ fn genome_center() -> Vec2 {
 }
 
 fn helix_len() -> f32 {
-    ui::u() * 158.0
+    render::u() * 158.0
 }
 
 /// A double helix around a vertical axis through `c`. `rung(f, k, half)`
@@ -110,7 +105,7 @@ fn draw_helix(
     rung: &dyn Fn(f32, usize, bool) -> Color,
     jitter: &dyn Fn(f32) -> f32,
 ) {
-    let u = ui::u();
+    let u = render::u();
     let n = 120;
     let top = c.y - len * 0.5;
     let strand_front = tint.unwrap_or(rgb(0xE6F4F0));
@@ -188,6 +183,17 @@ fn roulette(game: &Game, taxon: usize, i: usize, t: f32, lock: f32) -> (usize, b
 
 /// When a new species bursts into colour, in seconds into its reveal.
 const REVEAL_AT: f32 = 1.8;
+
+/// When card `new`-or-not has settled and the "next card" hint shows; a tap
+/// before then skips to it.
+fn settled_at(new: bool) -> f32 {
+    REVEAL_AT + if new { 0.8 } else { 0.4 }
+}
+
+/// Where the card being revealed is shown.
+fn showcase_center() -> Vec2 {
+    vec2(screen_width() * 0.5, screen_height() * 0.36)
+}
 /// Where the row of card slots sits, as a fraction of the screen height.
 const SLOTS_Y: f32 = 0.775;
 /// Most slots in one row; more wrap to a second.
@@ -222,7 +228,7 @@ fn slot_pos(i: usize, n: usize) -> Vec2 {
 
 /// A card's slot before its reveal; `lit` while it is the one being revealed.
 fn draw_empty_slot(c: Vec2, size: Vec2, lit: bool) {
-    let u = ui::u();
+    let u = render::u();
     let r = Rect::new(c.x - size.x * 0.5, c.y - size.y * 0.5, size.x, size.y);
     draw_rectangle(r.x, r.y, r.w, r.h, rgb(0x071422));
     let line = (u * 0.8).max(2.0);
@@ -237,7 +243,7 @@ fn draw_empty_slot(c: Vec2, size: Vec2, lit: bool) {
 
 /// A revealed card's slot: its rarity colour and its animal.
 fn draw_filled_slot(game: &Game, sprites: &Sprites, o: &Opened, c: Vec2, size: Vec2) {
-    let u = ui::u();
+    let u = render::u();
     let r = Rect::new(c.x - size.x * 0.5, c.y - size.y * 0.5, size.x, size.y);
     let col = tier_color(o.card.tier);
     draw_rectangle(r.x, r.y, r.w, r.h, rgb(0x071422));
@@ -296,6 +302,7 @@ impl Opening {
             taps: 0,
             mut_flash: 0.0,
             boomed: false,
+            reveal_fired: false,
             shake: 0.0,
             freeze: 0.0,
             flash: 0.0,
@@ -344,7 +351,7 @@ impl Opening {
 
     /// `results` must be `Some` when `wants_results()` was true (best last).
     pub fn tap(&mut self, results: Option<Vec<Opened>>) {
-        let u = ui::u();
+        let u = render::u();
         match self.stage {
             Stage::Sealed => {
                 self.taps += 1;
@@ -380,7 +387,7 @@ impl Opening {
                 }
             }
             Stage::Showcase(i) => {
-                let full = REVEAL_AT + if self.opened[i].card.new { 0.5 } else { 0.4 };
+                let full = settled_at(self.opened[i].card.new);
                 if self.t < full {
                     self.t = full;
                 } else {
@@ -394,7 +401,7 @@ impl Opening {
     /// Starts the next card's reveal, or ends the opening once every card
     /// is revealed.
     fn reveal_next(&mut self) {
-        let u = ui::u();
+        let u = render::u();
         let Some(i) = self.flipped.iter().position(|&f| f <= 0.0) else {
             self.stage = Stage::Done;
             return;
@@ -406,12 +413,40 @@ impl Opening {
         self.shake = (1.5 + self.opened[i].card.tier.index() as f32) * u;
         self.stage = Stage::Showcase(i);
         self.t = 0.0;
+        self.reveal_fired = false;
+    }
+
+    /// The flash as card `i`'s animal shows: a burst of particles for a new
+    /// species, a smaller jolt for a duplicate.
+    fn fire_reveal(&mut self, i: usize) {
+        let u = render::u();
+        let card = &self.opened[i].card;
+        let tier = card.tier;
+        if !card.new {
+            self.flash = 0.6;
+            self.shake = (3.0 + tier.index() as f32 * 2.0) * u;
+            return;
+        }
+        self.flash = 1.0;
+        self.shake = (6.0 + tier.index() as f32 * 3.0) * u;
+        let mut cols = vec![tier_color(tier), WHITE];
+        if tier >= Tier::Epic {
+            cols.extend(PRISM.iter().map(|&h| rgb(h)));
+        }
+        self.burst_particles(
+            showcase_center(),
+            90 + tier.index() * 30,
+            220.0 * u,
+            &cols,
+            30.0 * u,
+            u * 1.6,
+        );
     }
 
     /// The roulette for card `i`: other silhouettes flicker past, slowing
     /// down, until the real one (`taxon`) locks in before `REVEAL_AT`.
     fn draw_roulette(&self, game: &Game, sprites: &Sprites, taxon: usize, i: usize, c: Vec2) {
-        let u = ui::u();
+        let u = render::u();
         let size = screen_width() * 0.42;
         let (shown, ticked, locked) = roulette(game, taxon, i, self.t, REVEAL_AT - ROULETTE_HOLD);
         let tint = if ticked {
@@ -423,7 +458,7 @@ impl Opening {
         let (label, col) = if locked {
             ("LOCKED", WHITE)
         } else {
-            ("? ? ?", rgb(0x6FF5E1))
+            ("? ? ?", CYAN)
         };
         text_centered(label, c.x, c.y + size * 0.62, u * 9.0, col);
     }
@@ -460,7 +495,7 @@ impl Opening {
             return;
         }
         self.t += dt;
-        self.shake = (self.shake - dt * 40.0 * ui::u()).max(0.0);
+        self.shake = (self.shake - dt * 40.0 * render::u()).max(0.0);
         self.flash = (self.flash - dt * 1.8).max(0.0);
         for f in self.flipped.iter_mut() {
             if *f > 0.0 {
@@ -477,7 +512,7 @@ impl Opening {
 
         self.mut_flash = (self.mut_flash - dt * 1.4).max(0.0);
         if self.stage == Stage::Burst {
-            let u = ui::u();
+            let u = render::u();
             if !self.boomed {
                 self.shake = self.shake.max(self.t / BOOM * 3.0 * u);
                 if self.t >= BOOM {
@@ -505,6 +540,21 @@ impl Opening {
                         u * 1.7,
                     );
                 }
+            }
+            if self.t - BOOM > 1.3 + self.tell.index() as f32 * 0.15 {
+                self.reveal_next();
+            }
+        }
+        if let Stage::Showcase(i) = self.stage {
+            // A new species flashes just before it shows, a duplicate as it does.
+            let at = if self.opened[i].card.new {
+                REVEAL_AT - 0.05
+            } else {
+                REVEAL_AT
+            };
+            if !self.reveal_fired && self.t >= at {
+                self.reveal_fired = true;
+                self.fire_reveal(i);
             }
         }
     }
@@ -563,7 +613,7 @@ impl Opening {
             }
             Stage::Showcase(i) if self.opened[i].card.new => {
                 let col = tier_color(self.opened[i].card.tier);
-                let revealed = self.t >= 1.8;
+                let revealed = self.t >= REVEAL_AT;
                 Some(Rays {
                     center: vec2(0.5, 0.36),
                     color: rgb_of(col),
@@ -576,8 +626,8 @@ impl Opening {
         }
     }
 
-    fn draw_sealed(&mut self, assets: &Assets, off: Vec2, t: f32) {
-        let u = ui::u();
+    fn draw_sealed(&self, assets: &Assets, off: Vec2, t: f32) {
+        let u = render::u();
         let (sw, sh) = (screen_width(), screen_height());
         let c = genome_center() + off;
         let n = self.taps;
@@ -696,8 +746,8 @@ impl Opening {
         );
     }
 
-    fn draw_burst(&mut self, assets: &Assets, off: Vec2, t: f32, tell: Color) {
-        let u = ui::u();
+    fn draw_burst(&self, assets: &Assets, off: Vec2, t: f32, tell: Color) {
+        let u = render::u();
         let (sw, sh) = (screen_width(), screen_height());
         let c = genome_center() + off;
         if self.t < BOOM {
@@ -758,8 +808,7 @@ impl Opening {
             Tier::Legendary => "LEGENDARY!",
             Tier::Epic => "EPIC!",
             Tier::Rare => "RARE!",
-            Tier::Uncommon => "EVOLVED!",
-            Tier::Common => "EVOLVED!",
+            Tier::Uncommon | Tier::Common => "EVOLVED!",
         };
         let scale = 1.0 + 1.5 * (1.0 - ease_out_back((b / 0.35).min(1.0)));
         text_centered(label, sw * 0.5, sh * 0.2, u * 14.0 * scale.max(1.0), tell);
@@ -772,15 +821,12 @@ impl Opening {
                 continue;
             }
             let p = c.lerp(slot_pos(i, n), ease_out_back(local));
-            draw_empty_slot(p + off, size * (0.3 + 0.7 * local), false);
-        }
-        if b > 1.3 + self.tell.index() as f32 * 0.15 {
-            self.reveal_next();
+            draw_empty_slot(p, size * (0.3 + 0.7 * local), false);
         }
     }
 
     fn draw_showcase(
-        &mut self,
+        &self,
         game: &Game,
         sprites: &Sprites,
         assets: &Assets,
@@ -788,14 +834,14 @@ impl Opening {
         t: f32,
         i: usize,
     ) {
-        let u = ui::u();
+        let u = render::u();
         let (sw, sh) = (screen_width(), screen_height());
         let o = self.opened[i].clone();
         let taxon = o.card.taxon;
         let tx = game.taxon(taxon);
         let tier = o.card.tier;
         let col = tier_color(tier);
-        let c = vec2(sw * 0.5, sh * 0.36) + off;
+        let c = showcase_center() + off;
         let hint = self.next_hint();
         // Every card's slot, this one filling once its animal shows.
         let shown = self.t >= REVEAL_AT;
@@ -808,10 +854,6 @@ impl Opening {
                 return;
             }
             let since = self.t - REVEAL_AT;
-            if since < 0.05 {
-                self.flash = 0.6;
-                self.shake = (3.0 + tier.index() as f32 * 2.0) * u;
-            }
             let k = ease_out_back((since / 0.35).min(1.0));
             assets.glow(c, sw * 0.35, col, 0.3);
             ui::draw_taxon(sprites, game, taxon, o.card.morph, c, sw * 0.32 * k, WHITE);
@@ -848,7 +890,7 @@ impl Opening {
                 sh * 0.655,
                 u * 7.0,
                 if o.level_after > o.level_before {
-                    rgb(0xFFC56B)
+                    GOLD
                 } else {
                     TEXT_DIM
                 },
@@ -872,21 +914,20 @@ impl Opening {
                         sw * 0.5,
                         sh * 0.865 + k as f32 * u * 7.0,
                         u * 5.5,
-                        rgb(0xFFC56B),
+                        GOLD,
                     );
                 }
             }
-            if since > 0.4 {
+            if self.t >= settled_at(false) {
                 text_centered(&hint, sw * 0.5, sh * 0.95, u * 5.5, faded(TEXT_DIM, 0.8));
             }
             return;
         }
 
-        let reveal_at = REVEAL_AT;
-        let revealed = self.t >= reveal_at;
+        let revealed = self.t >= REVEAL_AT;
         let sprite_size = sw * 0.42;
         if revealed {
-            let k = ease_out_back(((self.t - reveal_at) / 0.4).min(1.0));
+            let k = ease_out_back(((self.t - REVEAL_AT) / 0.4).min(1.0));
             if o.card.morph == Morph::Amber || tier == Tier::Legendary {
                 for (j, &h) in PRISM.iter().enumerate() {
                     let a = t * 0.8 + j as f32;
@@ -910,24 +951,8 @@ impl Opening {
         } else {
             self.draw_roulette(game, sprites, taxon, i, c);
         }
-        if !revealed && self.t + 0.05 >= reveal_at {
-            self.flash = 1.0;
-            self.shake = (6.0 + tier.index() as f32 * 3.0) * u;
-            let mut cols = vec![col, WHITE];
-            if tier >= Tier::Epic {
-                cols.extend(PRISM.iter().map(|&h| rgb(h)));
-            }
-            self.burst_particles(
-                c,
-                90 + tier.index() * 30,
-                220.0 * u,
-                &cols,
-                30.0 * u,
-                u * 1.6,
-            );
-        }
 
-        let eco = ecology::of(tx.name);
+        let eco = tx.eco;
         let clues = [
             (
                 "HABITAT",
@@ -944,7 +969,7 @@ impl Opening {
         let y0 = sh * 0.60;
         for (k, (label, value)) in clues.iter().enumerate() {
             // Held back until the roulette locks, so they don't give it away.
-            let appear = reveal_at - ROULETTE_HOLD + k as f32 * 0.12;
+            let appear = REVEAL_AT - ROULETTE_HOLD + k as f32 * 0.12;
             if self.t < appear {
                 continue;
             }
@@ -957,7 +982,7 @@ impl Opening {
         }
 
         if revealed {
-            let k = ((self.t - reveal_at) / 0.3).min(1.0);
+            let k = ((self.t - REVEAL_AT) / 0.3).min(1.0);
             let stamp = 1.0 + 1.2 * (1.0 - ease_out_back(k));
             let label = if o.card.morph != Morph::None {
                 format!("NEW  ·  {}", o.card.morph.name().to_uppercase())
@@ -975,7 +1000,7 @@ impl Opening {
             text_centered(tier.name(), sw * 0.5, sh * 0.25, u * 7.5, col);
             let d = format!("Keystone: {}", eco.describe());
             text_centered(&d, sw * 0.5, sh * 0.86, fit_px(&d, sw * 0.9, u * 6.0), LIME);
-            if self.t > reveal_at + 0.8 {
+            if self.t >= settled_at(true) {
                 text_centered(&hint, sw * 0.5, sh * 0.92, u * 5.5, faded(TEXT_DIM, 0.8));
             }
         }

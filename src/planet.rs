@@ -164,9 +164,7 @@ impl Planet {
         }
         p
     }
-}
 
-impl Planet {
     /// How much of the planet each habitat covers, summing to 1 (indexed by
     /// `Habitat::index`). A taxon's odds follow its habitat's share, so land
     /// and vegetation decide what turns up, not only what can.
@@ -380,6 +378,34 @@ impl Biome {
 /// Atmospheric oxygen at an Oxygen lever level.
 pub fn oxygen_percent(level: u8) -> u8 {
     [5, 10, 15, 21, 28, 35][level.min(LEVEL_MAX) as usize]
+}
+
+/// What a lever's level is called in the lever panel ("Coasts", "21% O2").
+pub fn level_label(lever: Lever, level: u8) -> String {
+    let i = level.min(LEVEL_MAX) as usize;
+    match lever {
+        Lever::Land => [
+            "Water world",
+            "Islands",
+            "Coasts",
+            "Continents",
+            "Dry world",
+            "Supercontinent",
+        ][i]
+            .into(),
+        Lever::Vegetation => [
+            "Bare rock",
+            "Moss",
+            "Ferns",
+            "Forest",
+            "Dense forest",
+            "Jungle",
+        ][i]
+            .into(),
+        Lever::Oxygen => format!("{}% O2", oxygen_percent(level)),
+        Lever::Temperature => temperature_label(level).into(),
+        Lever::Volcanism => ["Calm", "Active", "Violent"][i.min(VOLCANISM_MAX as usize)].into(),
+    }
 }
 
 pub fn temperature_label(level: u8) -> &'static str {

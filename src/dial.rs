@@ -7,10 +7,10 @@ use std::f32::consts::{FRAC_PI_2, TAU};
 
 use macroquad::prelude::*;
 
-use crate::render::{faded, rgb, text, text_width, TRACK};
+use crate::render::{self, faded, rgb, text, text_width, CYAN, GOLD, LIME, LOCKED_BORDER, TRACK};
 use crate::spiral;
 use crate::sprites::{self, Sprites};
-use crate::ui::{self, Assets};
+use crate::ui::Assets;
 use crate::wait;
 
 /// Angle between two half-hour steps: 9 steps leave a gap before 2h.
@@ -35,17 +35,17 @@ pub fn max_half_width() -> f32 {
 }
 
 fn half_width(hours: f32) -> f32 {
-    ui::u() * (1.0 + (hours - wait::MIN_HOURS) * 0.9)
+    render::u() * (1.0 + (hours - wait::MIN_HOURS) * 0.9)
 }
 
 /// Cyan for a short wait, lime once morphs are boosted, amber at the top.
 pub fn color(hours: f32) -> Color {
     if hours >= wait::SURE_RARE_HOURS {
-        rgb(0xFFC56B)
+        GOLD
     } else if hours >= wait::MORPH_HOURS {
-        rgb(0xC5F76A)
+        LIME
     } else {
-        rgb(0x6FF5E1)
+        CYAN
     }
 }
 
@@ -59,11 +59,11 @@ fn on_ring(angle: f32, r: f32) -> Vec2 {
 
 /// Horizontal drag, in pixels, that moves the dial one half-hour step.
 pub fn step_px() -> f32 {
-    ui::u() * 10.0
+    render::u() * 10.0
 }
 
 pub fn draw(hours: f32, sprites: &Sprites, assets: &Assets) {
-    let (c, r, u) = (center(), radius(), ui::u());
+    let (c, r, u) = (center(), radius(), render::u());
     let col = color(hours);
     let at = angle_of(hours);
 
@@ -83,7 +83,7 @@ pub fn draw(hours: f32, sprites: &Sprites, assets: &Assets) {
         let (s, pc) = if h <= hours {
             (u * 2.0, col)
         } else {
-            (u * 1.4, rgb(0x3E4857))
+            (u * 1.4, LOCKED_BORDER)
         };
         draw_rectangle(p.x - s * 0.5, p.y - s * 0.5, s, s, pc);
     }
@@ -91,7 +91,7 @@ pub fn draw(hours: f32, sprites: &Sprites, assets: &Assets) {
     milestone(
         wait::MORPH_HOURS,
         "MORPHS x1.5",
-        rgb(0xC5F76A),
+        LIME,
         CHARM_ICON,
         sprites,
         hours,
@@ -99,7 +99,7 @@ pub fn draw(hours: f32, sprites: &Sprites, assets: &Assets) {
     milestone(
         wait::SURE_RARE_HOURS,
         "RARE+ SURE",
-        rgb(0xFFC56B),
+        GOLD,
         CATALYST_ICON,
         sprites,
         hours,
@@ -163,10 +163,10 @@ fn draw_halo(c: Vec2, r: f32, half: f32, cell: f32, col: Color) {
 
 /// A boon-icon badge on the ring at `at_hours`, lit once the wait reaches it.
 fn milestone(at_hours: f32, label: &str, col: Color, icon: usize, sprites: &Sprites, hours: f32) {
-    let u = ui::u();
+    let u = render::u();
     let p = on_ring(angle_of(at_hours), radius());
     let reached = hours >= at_hours;
-    let ring = if reached { col } else { rgb(0x3E4857) };
+    let ring = if reached { col } else { LOCKED_BORDER };
     draw_circle(p.x, p.y, u * 6.5, rgb(0x05090F));
     draw_circle_lines(p.x, p.y, u * 6.5, u * 0.7, ring);
     let tint = if reached { WHITE } else { faded(WHITE, 0.45) };

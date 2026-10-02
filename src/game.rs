@@ -83,25 +83,6 @@ impl Boon {
     }
 }
 
-pub fn morph_bit(m: Morph) -> u8 {
-    match m {
-        Morph::None => 0,
-        Morph::Giant => 1,
-        Morph::Albino => 2,
-        Morph::Melanistic => 4,
-        Morph::Amber => 8,
-    }
-}
-
-pub const MORPHS: [Morph; 4] = [Morph::Giant, Morph::Albino, Morph::Melanistic, Morph::Amber];
-
-pub fn morph_of_bit(bit: u8) -> Morph {
-    MORPHS
-        .into_iter()
-        .find(|&m| morph_bit(m) == bit)
-        .unwrap_or(Morph::None)
-}
-
 /// The chance a genome opened with Human ends the Earth.
 pub const DOOM_CHANCE: f32 = 0.2;
 /// Per RAD: luck past the cap, and morph chance added (x1.5, x2, ...).
@@ -264,99 +245,89 @@ pub struct Opened {
     pub first_morph: bool,
 }
 
-#[derive(Serialize, Deserialize)]
-struct SaveData {
+/// What a save is checked against before the game itself is read.
+#[derive(Deserialize)]
+struct SaveHeader {
     version: u32,
-    unlocked: Vec<bool>,
-    specimens: Vec<u32>,
-    morphs: Vec<u8>,
-    #[serde(alias = "found_day")]
-    found_ma: Vec<Option<u32>>,
-    planet: Planet,
-    shaped_from: Planet,
-    cycle: Option<Cycle>,
-    cycles_done: u32,
     /// Absent before the wait could be chosen: every cycle was 20 Ma.
     #[serde(default)]
     ma_done: Option<u32>,
-    #[serde(default = "default_wait")]
-    wait_hours: f32,
-    #[serde(alias = "nodule")]
-    genome: Option<Vec<Card>>,
-    pity: Pity,
-    rng: Rng,
-    #[serde(alias = "patrons")]
-    keystones: Vec<usize>,
-    boon: Option<Boon>,
-    boon_offer: Option<Vec<Boon>>,
-    #[serde(default)]
-    charges: Vec<u8>,
-    #[serde(default)]
-    held: Vec<u8>,
-    #[serde(default)]
-    gone: Vec<bool>,
-    #[serde(default)]
-    edition: Vec<u8>,
-    #[serde(default)]
-    last_launched: Option<Planet>,
-    #[serde(default = "default_points")]
-    wait_points: u8,
-    #[serde(default)]
-    rad: u32,
-    #[serde(default)]
-    fossil: Vec<bool>,
-    #[serde(default)]
-    doomed: bool,
-    #[serde(default)]
-    doom_risk: f32,
 }
 
+/// The game as saved: its own fields plus the format version.
+#[derive(Serialize)]
+struct Versioned<'a> {
+    version: u32,
+    #[serde(flatten)]
+    game: &'a Game,
+}
+
+/// Saved as is, but for the tree (static) and the levels (derived).
+/// The aliases and defaults read saves from older builds.
+#[derive(Serialize, Deserialize)]
 pub struct Game {
+    #[serde(skip, default = "Phylogeny::load")]
     pub phy: Phylogeny,
     pub unlocked: Vec<bool>,
     /// 0 until discovered, then 1..=`MAX_LEVEL`, derived from `specimens`.
+    #[serde(skip)]
     pub level: Vec<u32>,
     /// Copies collected per taxon, the discovery included.
     pub specimens: Vec<u32>,
-    /// `morph_bit` flags of the morphs owned per taxon.
+    /// `Morph::bit` flags of the morphs owned per taxon.
     pub morphs: Vec<u8>,
     /// Millions of years elapsed when each taxon evolved.
+    #[serde(alias = "found_day")]
     pub found_ma: Vec<Option<u32>>,
     pub planet: Planet,
     /// Points are spent as distance from this, so stepping back refunds.
     pub shaped_from: Planet,
     pub cycle: Option<Cycle>,
     pub cycles_done: u32,
-    /// Millions of years of the finished cycles.
+    /// Millions of years of the finished cycles (see `SaveHeader`).
+    #[serde(default)]
     pub ma_done: u32,
     /// The wait picked on the dial, reused as the next default.
+    #[serde(default = "default_wait")]
     pub wait_hours: f32,
+    #[serde(alias = "nodule")]
     pub genome: Option<Vec<Card>>,
     pub pity: Pity,
     rng: Rng,
+    #[serde(alias = "patrons")]
     pub keystones: Vec<usize>,
     pub boon: Option<Boon>,
     pub boon_offer: Option<Vec<Boon>>,
     /// Charges per taxon: cycles grown, or duplicates for the Starfish.
+    #[serde(default)]
     pub charges: Vec<u8>,
     /// Cycles a fragile keystone has run.
+    #[serde(default)]
     pub held: Vec<u8>,
     /// A fragile keystone that left; it can come back once found again.
+    #[serde(default)]
     pub gone: Vec<bool>,
-    /// The morph each animal works with as a keystone (`morph_bit`, 0 none).
+    /// The morph each animal works with as a keystone (`Morph::bit`, 0 none).
+    #[serde(default)]
     pub edition: Vec<u8>,
     /// The planet the last wait ran on, for the keystones that like stasis.
+    #[serde(default)]
     pub last_launched: Option<Planet>,
     /// Adjustment points the last wait gave this shaping, before keystones.
+    #[serde(default = "default_points")]
     pub wait_points: u8,
     /// Earths Human has ended: each one boosts rarity and morphs.
+    #[serde(default)]
     pub rad: u32,
     /// Every taxon found on any Earth. One not found on this Earth is a
     /// fossil: it keeps its level and morphs and waits to be found again.
+    #[serde(default)]
     pub fossil: Vec<bool>,
     /// The waiting genome ends the Earth when opened (rolled with it).
+    #[serde(default)]
     pub doomed: bool,
     /// The chance that roll had, to show while the genome waits.
+    #[serde(default)]
     pub doom_risk: f32,
 }
 
@@ -410,34 +381,9 @@ impl Game {
     }
 
     fn to_json(&self) -> String {
-        let data = SaveData {
+        let data = Versioned {
             version: SAVE_VERSION,
-            unlocked: self.unlocked.clone(),
-            specimens: self.specimens.clone(),
-            morphs: self.morphs.clone(),
-            found_ma: self.found_ma.clone(),
-            planet: self.planet,
-            shaped_from: self.shaped_from,
-            cycle: self.cycle,
-            cycles_done: self.cycles_done,
-            ma_done: Some(self.ma_done),
-            wait_hours: self.wait_hours,
-            genome: self.genome.clone(),
-            pity: self.pity,
-            rng: self.rng.clone(),
-            keystones: self.keystones.clone(),
-            boon: self.boon,
-            boon_offer: self.boon_offer.clone(),
-            charges: self.charges.clone(),
-            held: self.held.clone(),
-            gone: self.gone.clone(),
-            edition: self.edition.clone(),
-            last_launched: self.last_launched,
-            wait_points: self.wait_points,
-            rad: self.rad,
-            fossil: self.fossil.clone(),
-            doomed: self.doomed,
-            doom_risk: self.doom_risk,
+            game: self,
         };
         serde_json::to_string(&data).unwrap_or_default()
     }
@@ -448,62 +394,35 @@ impl Game {
     }
 
     fn from_json(json: &str, now: f64) -> Option<Self> {
-        let mut d: SaveData = serde_json::from_str(json).ok()?;
-        let phy = Phylogeny::load();
-        let n = phy.len();
-        let saved = d.unlocked.len();
-        if d.version != SAVE_VERSION
+        let header: SaveHeader = serde_json::from_str(json).ok()?;
+        let mut game: Self = serde_json::from_str(json).ok()?;
+        let n = game.phy.len();
+        let saved = game.unlocked.len();
+        if header.version != SAVE_VERSION
             || saved > n
-            || d.specimens.len() != saved
-            || d.morphs.len() != saved
-            || d.found_ma.len() != saved
-            || d.keystones.iter().any(|&p| p >= saved)
+            || game.specimens.len() != saved
+            || game.morphs.len() != saved
+            || game.found_ma.len() != saved
+            || game.keystones.iter().any(|&p| p >= saved)
         {
             return None;
         }
         // Taxa added since the save was written are appended to the tree.
-        d.unlocked.resize(n, false);
-        d.specimens.resize(n, 0);
-        d.morphs.resize(n, 0);
-        d.found_ma.resize(n, None);
-        d.charges.resize(n, 0);
-        d.held.resize(n, 0);
-        d.gone.resize(n, false);
-        d.edition.resize(n, 0);
-        d.fossil.resize(n, false);
-        for (f, &u) in d.fossil.iter_mut().zip(&d.unlocked) {
+        game.unlocked.resize(n, false);
+        game.specimens.resize(n, 0);
+        game.morphs.resize(n, 0);
+        game.found_ma.resize(n, None);
+        game.charges.resize(n, 0);
+        game.held.resize(n, 0);
+        game.gone.resize(n, false);
+        game.edition.resize(n, 0);
+        game.fossil.resize(n, false);
+        for (f, &u) in game.fossil.iter_mut().zip(&game.unlocked) {
             *f |= u;
         }
-        let mut game = Self {
-            phy,
-            unlocked: d.unlocked,
-            level: vec![0; n],
-            specimens: d.specimens,
-            morphs: d.morphs,
-            found_ma: d.found_ma,
-            planet: d.planet,
-            shaped_from: d.shaped_from,
-            cycle: d.cycle,
-            cycles_done: d.cycles_done,
-            ma_done: d.ma_done.unwrap_or(d.cycles_done * 20),
-            wait_hours: wait::snap(d.wait_hours),
-            genome: d.genome,
-            pity: d.pity,
-            rng: d.rng,
-            keystones: d.keystones,
-            boon: d.boon,
-            boon_offer: d.boon_offer,
-            charges: d.charges,
-            held: d.held,
-            gone: d.gone,
-            edition: d.edition,
-            last_launched: d.last_launched,
-            wait_points: d.wait_points,
-            rad: d.rad,
-            fossil: d.fossil,
-            doomed: d.doomed,
-            doom_risk: d.doom_risk,
-        };
+        game.level = vec![0; n];
+        game.ma_done = header.ma_done.unwrap_or(game.cycles_done * 20);
+        game.wait_hours = wait::snap(game.wait_hours);
         game.refresh_levels();
         game.tick(now);
         Some(game)
@@ -572,7 +491,20 @@ impl Game {
 
     /// The morph `taxon` works with as a keystone (one it owns, or none).
     pub fn edition(&self, taxon: usize) -> Morph {
-        morph_of_bit(self.edition[taxon] & self.morphs[taxon])
+        Morph::from_bit(self.edition[taxon] & self.morphs[taxon])
+    }
+
+    pub fn owns_morph(&self, taxon: usize, m: Morph) -> bool {
+        self.morphs[taxon] & m.bit() != 0
+    }
+
+    /// The best morph owned, for drawing a collection entry.
+    pub fn best_morph(&self, taxon: usize) -> Morph {
+        Morph::ALL
+            .into_iter()
+            .rev()
+            .find(|&m| self.owns_morph(taxon, m))
+            .unwrap_or(Morph::None)
     }
 
     /// Steps `taxon`'s keystone morph to the next one it owns, then none,
@@ -583,9 +515,9 @@ impl Game {
         }
         let owned: Vec<Morph> = std::iter::once(Morph::None)
             .chain(
-                MORPHS
+                Morph::ALL
                     .into_iter()
-                    .filter(|&m| self.morphs[taxon] & morph_bit(m) != 0),
+                    .filter(|&m| self.owns_morph(taxon, m)),
             )
             .collect();
         if owned.len() < 2 {
@@ -593,13 +525,13 @@ impl Game {
         }
         let cur = self.edition(taxon);
         let i = owned.iter().position(|&m| m == cur).unwrap_or(0);
-        self.edition[taxon] = morph_bit(owned[(i + 1) % owned.len()]);
+        self.edition[taxon] = owned[(i + 1) % owned.len()].bit();
         true
     }
 
     /// Tier units x level x the morph's multiplier.
     pub fn keystone_strength(&self, taxon: usize) -> f32 {
-        let eco = ecology::of(self.phy.taxa[taxon].name);
+        let eco = self.phy.taxa[taxon].eco;
         eco.tier.units()
             * (1.0 + 0.25 * (self.level[taxon].max(1) - 1) as f32)
             * self.edition(taxon).strength()
@@ -635,7 +567,7 @@ impl Game {
 
     /// Asleep for reasons of its own: the planet, or its morph.
     fn own_sleep(&self, taxon: usize) -> Option<String> {
-        let eco = ecology::of(self.phy.taxa[taxon].name);
+        let eco = self.phy.taxa[taxon].eco;
         if eco.rule == Rule::Extremes {
             return None;
         }
@@ -663,8 +595,7 @@ impl Game {
         }
         let name = self.phy.taxa[taxon].name;
         let tyrant = self.active_keystones().into_iter().any(|k| {
-            ecology::of(self.phy.taxa[k].name).rule == Rule::Catch(Catch::Tyrant)
-                && self.own_sleep(k).is_none()
+            self.phy.taxa[k].eco.rule == Rule::Catch(Catch::Tyrant) && self.own_sleep(k).is_none()
         });
         if tyrant && ecology::is_herbivore(name) {
             return Some("hunted by the T. rex".into());
@@ -694,7 +625,7 @@ impl Game {
 
     fn in_team(&self, taxon: usize, team: Team) -> bool {
         let t = &self.phy.taxa[taxon];
-        ecology::of(t.name).rule == Rule::Catch(Catch::Wildcard) || team.includes(t.name, t.group)
+        t.eco.rule == Rule::Catch(Catch::Wildcard) || team.includes(t.name, t.group)
     }
 
     /// What `bonus` gives at strength `amount`.
@@ -724,7 +655,7 @@ impl Game {
         let mut out: Vec<Report> = ks
             .iter()
             .map(|&k| {
-                let eco = ecology::of(self.phy.taxa[k].name);
+                let eco = self.phy.taxa[k].eco;
                 if let Some(why) = self.dormant_reason(k) {
                     return Report {
                         taxon: k,
@@ -827,7 +758,7 @@ impl Game {
         // Copies take the copyable part of another keystone's own gains.
         let own: Vec<Vec<Gain>> = out.iter().map(|r| r.gains.clone()).collect();
         let copyable = |i: usize| -> bool {
-            let rule = ecology::of(self.phy.taxa[ks[i]].name).rule;
+            let rule = self.phy.taxa[ks[i]].eco.rule;
             !matches!(
                 rule,
                 Rule::CopyAbove
@@ -840,7 +771,7 @@ impl Game {
             if matches!(r.status, Status::Asleep(_)) {
                 continue;
             }
-            let rule = ecology::of(self.phy.taxa[ks[i]].name).rule;
+            let rule = self.phy.taxa[ks[i]].eco.rule;
             let target = match rule {
                 Rule::CopyAbove => i.checked_sub(1).filter(|&j| copyable(j)),
                 Rule::CopyBelowMammal => {
@@ -922,29 +853,27 @@ impl Game {
     /// Why `lever` can't move by `delta` because of a keystone ("Megalodon
     /// holds it at Temperate or warmer"), if so.
     pub fn lever_lock(&self, lever: Lever, delta: i8) -> Option<String> {
-        let v = self.planet.get(lever);
-        for r in self.keystone_reports() {
-            let name = self.phy.taxa[r.taxon].name;
-            for g in &r.gains {
-                match (*g, lever) {
-                    (Gain::TempMin(t), Lever::Temperature) if delta < 0 && v <= t => {
-                        return Some(format!(
-                            "{name} holds it at {} or warmer",
-                            planet::temperature_label(t)
-                        ));
-                    }
-                    _ => {}
-                }
-            }
+        if lever != Lever::Temperature || delta >= 0 {
+            return None;
         }
-        None
+        let v = self.planet.get(lever);
+        self.keystone_reports().into_iter().find_map(|r| {
+            r.gains.iter().find_map(|g| match *g {
+                Gain::TempMin(t) if v <= t => Some(format!(
+                    "{} holds it at {} or warmer",
+                    self.phy.taxa[r.taxon].name,
+                    planet::temperature_label(t)
+                )),
+                _ => None,
+            })
+        })
     }
 
     /// Advances the charges and fragile timers of the keystones a finished
     /// wait ran with, on the planet it ran on.
     fn advance_keystones(&mut self, launched: Planet) {
         for k in self.active_keystones() {
-            let rule = ecology::of(self.phy.taxa[k].name).rule;
+            let rule = self.phy.taxa[k].eco.rule;
             let awake = self.dormant_reason(k).is_none();
             let keeps = self.edition(k) == Morph::Amber;
             let grow = match rule {
@@ -1205,7 +1134,7 @@ impl Game {
             .into_iter()
             .filter(|r| {
                 !matches!(r.status, Status::Asleep(_))
-                    && ecology::of(self.phy.taxa[r.taxon].name).rule == Rule::Duplicates
+                    && self.phy.taxa[r.taxon].eco.rule == Rule::Duplicates
             })
             .map(|r| r.taxon)
             .collect();
@@ -1237,16 +1166,15 @@ impl Game {
                 }
             }
             self.gone[t] = false;
-            let first_morph =
-                card.morph != Morph::None && self.morphs[t] & morph_bit(card.morph) == 0;
-            self.morphs[t] |= morph_bit(card.morph);
+            let first_morph = card.morph != Morph::None && !self.owns_morph(t, card.morph);
+            self.morphs[t] |= card.morph.bit();
             // A first morph becomes the keystone's look, unless it costs
             // something (albino) or only changes reach (melanistic).
             if first_morph
                 && self.edition[t] == 0
                 && matches!(card.morph, Morph::Giant | Morph::Amber)
             {
-                self.edition[t] = morph_bit(card.morph);
+                self.edition[t] = card.morph.bit();
             }
             self.level[t] = level_for(self.specimens[t]);
             out.push(Opened {
@@ -1440,7 +1368,8 @@ impl Default for Effects {
     }
 }
 
-fn plural(n: u32) -> &'static str {
+/// "s", unless `n` is one.
+pub fn plural(n: u32) -> &'static str {
     if n == 1 {
         ""
     } else {
@@ -1808,8 +1737,8 @@ mod tests {
         let mut g = Game::new(0.0);
         g.planet = REEF;
         let coral = equip(&mut g, "Coral");
-        g.morphs[coral] = morph_bit(Morph::Amber);
-        g.edition[coral] = morph_bit(Morph::Amber);
+        g.morphs[coral] = Morph::Amber.bit();
+        g.edition[coral] = Morph::Amber.bit();
         g.advance_keystones(REEF);
         g.planet.temperature = 1;
         g.advance_keystones(g.planet);
@@ -1873,10 +1802,10 @@ mod tests {
             volcanism: 0,
         };
         let ape = equip(&mut g, "Ape");
-        g.morphs[ape] = morph_bit(Morph::Albino) | morph_bit(Morph::Melanistic);
-        g.edition[ape] = morph_bit(Morph::Albino);
+        g.morphs[ape] = Morph::Albino.bit() | Morph::Melanistic.bit();
+        g.edition[ape] = Morph::Albino.bit();
         assert!(g.dormant_reason(ape).unwrap().contains("albino"));
-        g.edition[ape] = morph_bit(Morph::Melanistic);
+        g.edition[ape] = Morph::Melanistic.bit();
         g.planet.temperature = 1;
         assert_eq!(g.dormant_reason(ape), None, "two steps colder");
         g.edition[ape] = 0;
@@ -1888,7 +1817,7 @@ mod tests {
         let mut g = Game::new(0.0);
         let t = equip(&mut g, "Urmetazoan");
         assert!(!g.cycle_edition(t), "nothing to pick");
-        g.morphs[t] = morph_bit(Morph::Giant) | morph_bit(Morph::Amber);
+        g.morphs[t] = Morph::Giant.bit() | Morph::Amber.bit();
         assert!(g.cycle_edition(t));
         assert_eq!(g.edition(t), Morph::Giant);
         g.cycle_edition(t);
@@ -1983,7 +1912,7 @@ mod tests {
     fn ending_the_earth_keeps_fossils_and_adds_rad() {
         let (mut g, human) = with_human();
         g.specimens[human] = 9;
-        g.morphs[human] = morph_bit(Morph::Amber);
+        g.morphs[human] = Morph::Amber.bit();
         g.ma_done = 500;
         g.end_earth();
         assert_eq!(g.rad, 1);
@@ -1993,7 +1922,7 @@ mod tests {
         assert!(g.keystones.is_empty());
         assert_eq!(g.ma_done, 0);
         assert_eq!(g.planet, Planet::default());
-        assert_eq!(g.morphs[human], morph_bit(Morph::Amber), "morphs kept");
+        assert_eq!(g.morphs[human], Morph::Amber.bit(), "morphs kept");
         assert!(!g.toggle_keystone(human), "a fossil must be found again");
         let odds = g.forecast().odds;
         assert!(odds.luck >= RAD_LUCK && odds.morph_rad == 1.0 + RAD_MORPH);
