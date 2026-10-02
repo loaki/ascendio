@@ -20,6 +20,7 @@ version = "0.1.0"
 dependencies = [
  "macroquad",
  "quad-storage",
+ "sapp-jsutils",
  "serde",
  "serde_json",
 ]

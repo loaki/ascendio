@@ -1,10 +1,21 @@
 // Spliced into miniquad's MainActivity by cargo-quad-apk (see quad.toml):
-// each "//%" block lands at the matching marker. src/notify.rs calls these.
+// each "//%" block lands at the matching marker. src/notify.rs and
+// src/net.rs call these.
 
 //% IMPORTS
 import android.app.NotificationManager;
 import android.content.pm.PackageManager;
 import android.provider.Settings;
+import android.app.AlertDialog;
+import android.content.DialogInterface;
+import android.text.InputFilter;
+import android.widget.EditText;
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.util.concurrent.ConcurrentHashMap;
 //% END
 
 //% MAIN_ACTIVITY_BODY
@@ -48,5 +59,123 @@ import android.provider.Settings;
             i.setData(android.net.Uri.fromParts("package", getPackageName(), null));
         }
         startActivity(i);
+    }
+
+    // --- the leaderboard's HTTP (src/net.rs) ------------------------------
+    // A request runs on its own thread; the game polls httpStatus each frame
+    // (0 in flight, 1 if nothing answered, else the HTTP status), then takes
+    // the body once.
+
+    private final ConcurrentHashMap<Integer, String[]> httpDone = new ConcurrentHashMap<Integer, String[]>();
+    private int httpNext = 1;
+
+    public int httpStart(final String method, final String url, final String body) {
+        final int id = httpNext++;
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                String[] result;
+                try {
+                    HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
+                    c.setRequestMethod(method);
+                    c.setConnectTimeout(10000);
+                    c.setReadTimeout(10000);
+                    if (body.length() > 0) {
+                        c.setDoOutput(true);
+                        c.setRequestProperty("Content-Type", "application/json");
+                        OutputStream out = c.getOutputStream();
+                        out.write(body.getBytes("UTF-8"));
+                        out.close();
+                    }
+                    int code = c.getResponseCode();
+                    InputStream in = code < 400 ? c.getInputStream() : c.getErrorStream();
+                    String text = "";
+                    if (in != null) {
+                        ByteArrayOutputStream buf = new ByteArrayOutputStream();
+                        byte[] chunk = new byte[4096];
+                        int n;
+                        while ((n = in.read(chunk)) > 0) {
+                            buf.write(chunk, 0, n);
+                        }
+                        in.close();
+                        text = buf.toString("UTF-8");
+                    }
+                    c.disconnect();
+                    result = new String[] { Integer.toString(code), text };
+                } catch (Exception e) {
+                    result = new String[] { "1", "" };
+                }
+                httpDone.put(id, result);
+            }
+        }).start();
+        return id;
+    }
+
+    public int httpStatus(int id) {
+        String[] r = httpDone.get(id);
+        return r == null ? 0 : Integer.parseInt(r[0]);
+    }
+
+    public String httpTake(int id) {
+        String[] r = httpDone.remove(id);
+        return r == null ? "" : r[1];
+    }
+
+    // --- the name dialog (src/net.rs) -------------------------------------
+    // promptStatus: 0 nothing asked, 1 open, 2 answered (text, or null if
+    // cancelled); promptTake hands the answer over and goes back to 0.
+
+    private volatile int promptState = 0;
+    private volatile String promptAnswer = null;
+
+    public int promptStatus() {
+        return promptState;
+    }
+
+    public String promptTake() {
+        String a = promptAnswer;
+        promptAnswer = null;
+        promptState = 0;
+        return a;
+    }
+
+    public void promptOpen(final String title, final String current) {
+        promptState = 1;
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                final EditText input = new EditText(MainActivity.this);
+                input.setText(current);
+                input.setSingleLine(true);
+                input.setSelectAllOnFocus(true);
+                input.setFilters(new InputFilter[] { new InputFilter.LengthFilter(16) });
+                AlertDialog dialog = new AlertDialog.Builder(MainActivity.this)
+                    .setTitle(title)
+                    .setView(input)
+                    .setPositiveButton("OK", new DialogInterface.OnClickListener() {
+                        @Override
+                        public void onClick(DialogInterface d, int which) {
+                            promptAnswer = input.getText().toString();
+                            promptState = 2;
+                        }
+                    })
+                    .setNegativeButton("Cancel", new DialogInterface.OnClickListener() {
+                        @Override
+                        public void onClick(DialogInterface d, int which) {
+                            promptAnswer = null;
+                            promptState = 2;
+                        }
+                    })
+                    .setOnCancelListener(new DialogInterface.OnCancelListener() {
+                        @Override
+                        public void onCancel(DialogInterface d) {
+                            promptAnswer = null;
+                            promptState = 2;
+                        }
+                    })
+                    .create();
+                dialog.show();
+            }
+        });
     }
 //% END

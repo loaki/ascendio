@@ -9,6 +9,7 @@ use crate::ecology::{self, Bonus, Rule};
 use crate::game::{self, Boon, Game, Phase, Report, Status};
 use crate::genome;
 use crate::genome::Morph;
+use crate::leaderboard::{Board, Entry, Leaderboard, View};
 use crate::planet::{self, Biome, Lever};
 use crate::render::{
     self, draw_meter, faded, fit_px, rgb, text, text_centered, text_width, wrap_lines, ACCENT_DNA,
@@ -32,6 +33,8 @@ pub struct Assets {
     pub glow: Texture2D,
     /// The settings gear, idle and lit.
     pub gear: [Texture2D; 2],
+    /// The leaderboard's trophy, idle and lit.
+    pub trophy: [Texture2D; 2],
 }
 
 /// The settings gear, 16x16, lit from the top left: `l` light, `b` base,
@@ -61,9 +64,36 @@ const GEAR_INKS: [[u32; 4]; 2] = [
     [0xBFE8F0, 0x5BC8F5, 0x2F7F92, 0x0E242C],
 ];
 
-fn gear_texture(inks: [u32; 4]) -> Texture2D {
+/// The leaderboard's cup, 16x16, in the same four inks as the gear.
+const TROPHY: [&str; 16] = [
+    "................",
+    "..kkkkkkkkkkkk..",
+    "kkkllllllbbbdkkk",
+    "kbklllllbbbbdkdk",
+    "kbklllllbbbbdkdk",
+    "kbkllllbbbbbdkdk",
+    ".kkkllbbbbbbdkk.",
+    "...klbbbbbbdk...",
+    "....kbbbbbdk....",
+    ".....kbbbdk.....",
+    "......kbdk......",
+    "......kbdk......",
+    ".....kbbbdk.....",
+    "....kllbbbdk....",
+    "....kkkkkkkk....",
+    "................",
+];
+
+/// Gold when idle, brighter when lit.
+const TROPHY_INKS: [[u32; 4]; 2] = [
+    [0xFFF0B0, 0xF0B840, 0xB07A20, 0x101420],
+    [0xFFFBE0, 0xFFD45A, 0xD89A30, 0x2A1A08],
+];
+
+/// 16x16 pixel art in `l`ight, `b`ase, `d`ark and in`k`.
+fn icon_texture(art: &[&str; 16], inks: [u32; 4]) -> Texture2D {
     let mut buf = vec![0u8; 16 * 16 * 4];
-    for (y, row) in GEAR.iter().enumerate() {
+    for (y, row) in art.iter().enumerate() {
         for (x, ch) in row.bytes().enumerate() {
             let Some(i) = b"lbdk".iter().position(|&c| c == ch) else {
                 continue;
@@ -96,7 +126,8 @@ impl Assets {
 
         Self {
             glow,
-            gear: GEAR_INKS.map(gear_texture),
+            gear: GEAR_INKS.map(|inks| icon_texture(&GEAR, inks)),
+            trophy: TROPHY_INKS.map(|inks| icon_texture(&TROPHY, inks)),
         }
     }
 
@@ -162,16 +193,30 @@ pub fn gear_rect() -> Rect {
 
 /// The gear in its box; `lit` while settings are open.
 fn draw_gear(assets: &Assets, lit: bool) {
-    let r = gear_rect();
+    draw_icon_button(gear_rect(), &assets.gear, lit, ACCENT_DNA);
+}
+
+/// The leaderboard's trophy, left of the gear.
+pub fn trophy_rect() -> Rect {
+    let g = gear_rect();
+    Rect::new(g.x - g.w - render::u() * 2.0, g.y, g.w, g.h)
+}
+
+fn draw_trophy(assets: &Assets, lit: bool) {
+    draw_icon_button(trophy_rect(), &assets.trophy, lit, GOLD);
+}
+
+/// A top-bar button around a 16x16 icon; `lit` while its screen is open.
+fn draw_icon_button(r: Rect, icon: &[Texture2D; 2], lit: bool, accent: Color) {
     if lit {
-        frame(r, rgb(0x12303A), ACCENT_DNA, 1.0);
+        frame(r, faded(accent, 0.18), accent, 1.0);
     } else {
         frame(r, PANEL, EDGE, 1.0);
     }
     // A whole number of texels per pixel keeps the pixel art crisp.
     let s = ((r.w * 0.72 / 16.0).floor().max(1.0) * 16.0).round();
     draw_texture_ex(
-        &assets.gear[lit as usize],
+        &icon[lit as usize],
         (r.x + (r.w - s) * 0.5).round(),
         (r.y + (r.h - s) * 0.5).round(),
         WHITE,
@@ -211,7 +256,7 @@ pub fn rad_badge_rect(game: &Game) -> Option<Rect> {
     if game.rad == 0 {
         return None;
     }
-    let g = gear_rect();
+    let g = trophy_rect();
     let h = g.h * 0.72;
     let w = h * 2.6;
     Some(Rect::new(
@@ -295,9 +340,10 @@ pub fn draw_hud(game: &Game, now: f64, assets: &Assets) {
     let px = bar_h * 0.34;
     draw_top_bar();
     draw_gear(assets, false);
+    draw_trophy(assets, false);
     draw_rad_badge(game);
     // Text stops short of the badge and the gear.
-    let right = rad_badge_rect(game).map_or(gear_rect().x, |b| b.x);
+    let right = rad_badge_rect(game).map_or(trophy_rect().x, |b| b.x);
     let max_w = right - px * 1.4;
     let head = format!("{} Ma  ·  {}", game.ma_elapsed(now), game.era());
     text(
@@ -2181,6 +2227,62 @@ pub struct SettingsView {
     pub allowed: bool,
     /// `Settings::brightness`, in percent.
     pub brightness: u8,
+    /// The leaderboard name.
+    pub name: String,
+    /// The name being typed, when the game reads the keyboard itself.
+    pub typing: Option<String>,
+}
+
+/// The top bar of a full-screen page: back at the left, its title, and the
+/// trophy and the gear, the page's own one lit.
+fn draw_screen_bar(title: &str, assets: &Assets, gear_lit: bool, trophy_lit: bool) {
+    let (sw, u, bar_h) = (screen_width(), render::u(), render::bar_height());
+    draw_top_bar();
+    draw_gear(assets, gear_lit);
+    draw_trophy(assets, trophy_lit);
+    // A chunky pixel chevron for "back".
+    let b = settings_back_rect();
+    let c = vec2(b.x + b.w * 0.5, b.y + b.h * 0.5);
+    let (arm, w) = (b.h * 0.2, (u * 1.5).max(2.0));
+    draw_line(
+        c.x + arm * 0.5,
+        c.y - arm,
+        c.x - arm * 0.5,
+        c.y,
+        w,
+        TEXT_DIM,
+    );
+    draw_line(
+        c.x - arm * 0.5,
+        c.y,
+        c.x + arm * 0.5,
+        c.y + arm,
+        w,
+        TEXT_DIM,
+    );
+    text_centered(title, sw * 0.5, bar_h * 0.6, bar_h * 0.36, TEXT);
+}
+
+/// The build, in the footer of a full-screen page: `make apk` sets
+/// ASCENDIO_VERSION.
+fn draw_version_footer() {
+    let (sw, sh, bar_h) = (screen_width(), screen_height(), render::bar_height());
+    let foot = sh - bar_h;
+    draw_line(0.0, foot, sw, foot, 1.0, EDGE);
+    text_centered(
+        "ASCENDIO",
+        sw * 0.5,
+        foot + bar_h * 0.42,
+        bar_h * 0.26,
+        TEXT_DIM,
+    );
+    text_centered(
+        option_env!("ASCENDIO_VERSION").unwrap_or("dev"),
+        sw * 0.5,
+        foot + bar_h * 0.72,
+        bar_h * 0.22,
+        LOCKED_TEXT,
+    );
 }
 
 /// The back arrow, at the left end of the top bar.
@@ -2189,10 +2291,10 @@ pub fn settings_back_rect() -> Rect {
     Rect::new(screen_width() - g.x - g.w, g.y, g.w, g.h)
 }
 
+/// The notifications panel, under the leaderboard's.
 fn settings_panel_rect() -> Rect {
-    let (sw, u) = (screen_width(), render::u());
-    let y = render::bar_height() + u * 8.0;
-    Rect::new(sw * 0.04, y, sw * 0.92, u * 46.0)
+    let (l, u) = (player_panel_rect(), render::u());
+    Rect::new(l.x, l.y + l.h + u * 6.0, l.w, u * 46.0)
 }
 
 /// The display panel, under the notifications.
@@ -2207,6 +2309,56 @@ pub fn brightness_button_rect(plus: bool) -> Rect {
     let s = u * 13.0;
     let x = p.x + p.w - u * 5.0 - s - if plus { 0.0 } else { s + u * 3.0 };
     Rect::new(x, p.y + u * 16.0, s, s)
+}
+
+/// The leaderboard panel, first on the page.
+fn player_panel_rect() -> Rect {
+    let (sw, u) = (screen_width(), render::u());
+    let y = render::bar_height() + u * 8.0;
+    Rect::new(sw * 0.04, y, sw * 0.92, u * 34.0)
+}
+
+/// EDIT (SAVE while typing), at the right of the name row.
+pub fn name_button_rect() -> Rect {
+    let (p, u) = (player_panel_rect(), render::u());
+    let (w, h) = (u * 28.0, u * 13.0);
+    Rect::new(p.x + p.w - u * 5.0 - w, p.y + u * 16.0, w, h)
+}
+
+fn draw_player_panel(view: &SettingsView) {
+    let (p, u) = (player_panel_rect(), render::u());
+    frame(p, PANEL, EDGE, 1.0);
+    let x = p.x + u * 6.0;
+    let px = u * 7.5;
+    text("LEADERBOARD", x, p.y + u * 10.0, px, ACCENT_WARN);
+    let edit = name_button_rect();
+    let y = edit.y + edit.h * 0.66;
+    text("Name", x, y, px, TEXT);
+    let nx = x + text_width("Name", px) + u * 5.0;
+    let room = edit.x - u * 4.0 - nx;
+    match &view.typing {
+        Some(typed) => {
+            // A blinking caret while the keyboard types into it.
+            let caret = if (get_time() * 2.0) as i64 % 2 == 0 {
+                "_"
+            } else {
+                " "
+            };
+            let shown = format!("{typed}{caret}");
+            text(&shown, nx, y, fit_px(&shown, room, px * 0.9), TEXT);
+        }
+        None => text(&view.name, nx, y, fit_px(&view.name, room, px * 0.9), CYAN),
+    }
+    let hot = view.typing.is_some();
+    let label = if hot { "SAVE" } else { "EDIT" };
+    frame(edit, BUTTON_BG, if hot { CYAN } else { BUTTON_EDGE }, 1.5);
+    text_centered(
+        label,
+        edit.x + edit.w * 0.5,
+        edit.y + edit.h * 0.68,
+        fit_px(label, edit.w * 0.85, edit.h * 0.5),
+        if hot { CYAN } else { TEXT },
+    );
 }
 
 fn draw_display_panel(view: &SettingsView) {
@@ -2281,32 +2433,9 @@ pub fn notify_blocked(v: &SettingsView) -> bool {
 
 pub fn draw_settings(view: &SettingsView, assets: &Assets) {
     clear_background(render::BG);
-    let (sw, sh, u) = (screen_width(), screen_height(), render::u());
-    let bar_h = render::bar_height();
+    let u = render::u();
 
-    draw_top_bar();
-    draw_gear(assets, true);
-    // A chunky pixel chevron for "back".
-    let b = settings_back_rect();
-    let c = vec2(b.x + b.w * 0.5, b.y + b.h * 0.5);
-    let (arm, w) = (b.h * 0.2, (u * 1.5).max(2.0));
-    draw_line(
-        c.x + arm * 0.5,
-        c.y - arm,
-        c.x - arm * 0.5,
-        c.y,
-        w,
-        TEXT_DIM,
-    );
-    draw_line(
-        c.x - arm * 0.5,
-        c.y,
-        c.x + arm * 0.5,
-        c.y + arm,
-        w,
-        TEXT_DIM,
-    );
-    text_centered("SETTINGS", sw * 0.5, bar_h * 0.6, bar_h * 0.36, TEXT);
+    draw_screen_bar("SETTINGS", assets, true, false);
 
     let p = settings_panel_rect();
     frame(p, PANEL, EDGE, 1.0);
@@ -2367,21 +2496,193 @@ pub fn draw_settings(view: &SettingsView, assets: &Assets) {
 
     draw_display_panel(view);
 
-    // The build, in the footer: `make apk` sets ASCENDIO_VERSION.
-    let foot = sh - bar_h;
-    draw_line(0.0, foot, sw, foot, 1.0, EDGE);
-    text_centered(
-        "ASCENDIO",
-        sw * 0.5,
-        foot + bar_h * 0.42,
-        bar_h * 0.26,
+    draw_player_panel(view);
+    draw_version_footer();
+}
+
+// --- the leaderboard ----------------------------------------------------------------
+
+fn board_rows_rect() -> Rect {
+    let (sw, sh, u, bar_h) = (
+        screen_width(),
+        screen_height(),
+        render::u(),
+        render::bar_height(),
+    );
+    let top = bar_h + u * 16.0;
+    Rect::new(sw * 0.04, top, sw * 0.92, sh - bar_h - u * 4.0 - top)
+}
+
+fn board_row_h() -> f32 {
+    render::u() * 18.0
+}
+
+/// This player's row, wherever it is: pinned under the list so the rank is
+/// always in view.
+fn board_me(board: &Board) -> Option<&Entry> {
+    board
+        .me
+        .as_ref()
+        .or_else(|| board.top.iter().find(|e| e.me))
+}
+
+/// Room for the rows, less the pinned one.
+fn board_scroll_rect(board: &Board) -> Rect {
+    let mut r = board_rows_rect();
+    if board_me(board).is_some() {
+        r.h -= board_row_h() + render::u() * 6.0;
+    }
+    r
+}
+
+pub fn leaderboard_max_scroll(lb: &Leaderboard) -> f32 {
+    let View::Ready(board) = &lb.view else {
+        return 0.0;
+    };
+    let rows = board.top.len() as f32 * board_row_h();
+    (rows - board_scroll_rect(board).h).max(0.0)
+}
+
+/// Gold, silver and bronze for the podium.
+fn rank_color(rank: u32) -> Color {
+    match rank {
+        1 => GOLD,
+        2 => rgb(0xC8D2DC),
+        3 => rgb(0xD08A50),
+        _ => TEXT_DIM,
+    }
+}
+
+/// One player: rank, their last animal, name, RAD and species.
+fn draw_board_row(game: &Game, sprites: &Sprites, e: &Entry, r: Rect) {
+    let u = render::u();
+    frame(
+        Rect::new(r.x, r.y + u * 0.5, r.w, r.h - u),
+        if e.me { faded(CYAN, 0.12) } else { CARD_BG },
+        if e.me { CYAN } else { PANEL_EDGE },
+        if e.me { 1.5 } else { 1.0 },
+    );
+    let cy = r.y + r.h * 0.5;
+    let base = cy + u * 2.6;
+    let px = u * 7.0;
+    let rank = e.rank.to_string();
+    let rank_px = fit_px(&rank, u * 15.0, px * 1.1);
+    text(
+        &rank,
+        r.x + u * 18.0 - text_width(&rank, rank_px),
+        base,
+        rank_px,
+        rank_color(e.rank),
+    );
+    let icon = r.h * 0.78;
+    let ix = r.x + u * 22.0 + icon * 0.5;
+    if e.animal < game.phy.len() {
+        draw_taxon(
+            sprites,
+            game,
+            e.animal,
+            Morph::None,
+            vec2(ix, cy),
+            icon,
+            WHITE,
+        );
+    } else {
+        text_centered("?", ix, base, px, LOCKED_TEXT);
+    }
+    // Right to left: species, then RAD, then the name takes what is left.
+    let right = r.x + r.w - u * 4.0;
+    let species = format!("{} species", e.species);
+    let spx = px * 0.85;
+    let species_x = right - text_width(&species, spx);
+    text(&species, species_x, base, spx, LIME);
+    let rad = format!("{} RAD", e.rad);
+    let rad_x = species_x - u * 6.0 - text_width(&rad, spx);
+    text(
+        &rad,
+        rad_x,
+        base,
+        spx,
+        if e.rad > 0 { RAD_COLOR } else { LOCKED_TEXT },
+    );
+    let nx = ix + icon * 0.5 + u * 4.0;
+    let name_px = fit_px(&e.name, rad_x - u * 4.0 - nx, px);
+    text(&e.name, nx, base, name_px, if e.me { CYAN } else { TEXT });
+}
+
+pub fn draw_leaderboard(game: &Game, lb: &Leaderboard, sprites: &Sprites, assets: &Assets) {
+    clear_background(render::BG);
+    draw_screen_bar("LEADERBOARD", assets, false, true);
+    let (sw, u) = (screen_width(), render::u());
+    let rows = board_rows_rect();
+    let px = u * 6.0;
+    let mid = rows.y + rows.h * 0.4;
+    let message = |line: &str, sub: &str| {
+        text_centered(
+            line,
+            sw * 0.5,
+            mid,
+            fit_px(line, sw * 0.9, px * 1.2),
+            TEXT_DIM,
+        );
+        text_centered(sub, sw * 0.5, mid + u * 10.0, px, LOCKED_TEXT);
+    };
+    let board = match &lb.view {
+        View::Unavailable => {
+            message("The leaderboard isn't set up", "in this build");
+            return;
+        }
+        View::Loading => {
+            message("Loading...", "");
+            return;
+        }
+        View::Failed => {
+            message("Can't reach the leaderboard", "tap to try again");
+            return;
+        }
+        View::Ready(board) => board,
+    };
+    let count = format!(
+        "{} player{}  ·  ranked by RAD, then species",
+        board.players,
+        game::plural(board.players)
+    );
+    text(
+        &count,
+        rows.x,
+        rows.y - u * 6.0,
+        fit_px(&count, rows.w, px * 0.9),
         TEXT_DIM,
     );
-    text_centered(
-        option_env!("ASCENDIO_VERSION").unwrap_or("dev"),
-        sw * 0.5,
-        foot + bar_h * 0.72,
-        bar_h * 0.22,
-        LOCKED_TEXT,
+    if board.top.is_empty() {
+        message("No one yet", "be the first");
+        return;
+    }
+    let area = board_scroll_rect(board);
+    let h = board_row_h();
+    for (k, e) in board.top.iter().enumerate() {
+        let y = area.y + k as f32 * h - lb.scroll;
+        if y + h < area.y || y > area.y + area.h {
+            continue;
+        }
+        draw_board_row(game, sprites, e, Rect::new(area.x, y, area.w, h));
+    }
+    // Rows scrolled past the edges stay under the bar and the footer.
+    let bar_h = render::bar_height();
+    draw_rectangle(0.0, bar_h, sw, area.y - bar_h, render::BG);
+    text(
+        &count,
+        rows.x,
+        rows.y - u * 6.0,
+        fit_px(&count, rows.w, px * 0.9),
+        TEXT_DIM,
     );
+    let below = area.y + area.h;
+    draw_rectangle(0.0, below, sw, screen_height() - below, render::BG);
+    if let Some(me) = board_me(board) {
+        let y = below + u * 6.0;
+        text("YOU", area.x, y - u * 1.5, px * 0.85, CYAN);
+        draw_board_row(game, sprites, me, Rect::new(area.x, y, area.w, h));
+    }
+    draw_screen_bar("LEADERBOARD", assets, false, true);
+    draw_version_footer();
 }

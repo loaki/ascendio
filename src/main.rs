@@ -9,6 +9,8 @@ mod game;
 mod genome;
 mod genome_bg;
 mod layout;
+mod leaderboard;
+mod net;
 mod notify;
 mod opening;
 mod pixel;
@@ -29,6 +31,7 @@ use backdrop::Backdrop;
 use collapse::Collapse;
 use game::{Game, Phase};
 use layout::Layout;
+use leaderboard::{Leaderboard, Score};
 use opening::Opening;
 use planet::Lever;
 use settings::Settings;
@@ -46,6 +49,14 @@ enum Mode {
     Map,
     Keystones,
     Settings,
+    Leaderboard,
+}
+
+impl Mode {
+    /// The full-screen pages, opened from the top bar.
+    fn is_page(self) -> bool {
+        matches!(self, Mode::Settings | Mode::Leaderboard)
+    }
 }
 
 /// Seconds between autosaves.
@@ -68,6 +79,7 @@ enum ShotKind {
     Dial,
     Keystones,
     Settings,
+    Leaderboard,
     /// The map with the biome guide open.
     Biomes,
     /// The end of the Earth from the start (`ASCENDIO_SHOT_AFTER` picks the
@@ -85,6 +97,7 @@ impl ShotKind {
             "dial" => Self::Dial,
             "keystones" => Self::Keystones,
             "settings" => Self::Settings,
+            "leaderboard" => Self::Leaderboard,
             "biomes" => Self::Biomes,
             "collapse" => Self::Collapse,
             "backdrop" => Self::Backdrop,
@@ -99,6 +112,7 @@ impl ShotKind {
             Self::Spiral | Self::Dial | Self::Backdrop => Some(Mode::Spiral),
             Self::Keystones => Some(Mode::Keystones),
             Self::Settings => Some(Mode::Settings),
+            Self::Leaderboard => Some(Mode::Leaderboard),
             Self::Collapse => None,
         }
     }
@@ -128,7 +142,7 @@ struct Dev {
     /// `ASCENDIO_DEMO_TAPS=n`: start on a ready genome and tap it `n` times.
     demo_taps: Option<u32>,
     /// `ASCENDIO_SHOT=out.png`, `ASCENDIO_SHOT_AFTER` (default 5) and
-    /// `ASCENDIO_SHOT_MODE=map|spiral|dial|keystones|settings|biomes|collapse|backdrop`.
+    /// `ASCENDIO_SHOT_MODE=map|spiral|dial|keystones|settings|leaderboard|biomes|collapse|backdrop`.
     shot: Option<Shot>,
 }
 
@@ -220,8 +234,13 @@ struct App {
     cam: Camera,
     input: Input,
     mode: Mode,
-    /// Where the settings' back arrow returns to.
-    settings_from: Mode,
+    /// Where a page's back arrow returns to.
+    page_from: Mode,
+    leaderboard: Leaderboard,
+    /// The name being typed, on a platform without a text box of its own.
+    typing: Option<String>,
+    /// A native text box for the name is open (Android answers later).
+    asking_name: bool,
     keystones: KeystoneView,
     /// The animal page open over everything.
     detail: Option<usize>,
@@ -270,11 +289,14 @@ impl App {
             game.planet = p;
             game.shaped_from = p;
         }
-        let settings = if dev.persist {
+        let mut settings = if dev.persist {
             Settings::load()
         } else {
             Settings::default()
         };
+        if settings.ensure_player(leaderboard::id_seed()) && dev.persist {
+            settings.save();
+        }
         notify::sync(&game, settings.notify, now, dev.time_scale);
         if dev.demo_taps.is_some() {
             game.step_lever(Lever::Oxygen, 1);
@@ -283,7 +305,7 @@ impl App {
         }
         let mut nav = Nav::new(&game);
         nav.go_to(&game, game.most_advanced());
-        Self {
+        let mut app = Self {
             layout: map_layout(&game),
             sprites: Sprites::build(&game.phy),
             assets: Assets::build(),
@@ -293,7 +315,16 @@ impl App {
             cam: Camera::new(),
             input: Input::new(),
             mode: Mode::Spiral,
-            settings_from: Mode::Spiral,
+            page_from: Mode::Spiral,
+            // Only a real game, played in real time, goes on the board.
+            leaderboard: Leaderboard::new(
+                dev.persist
+                    && dev.time_scale == 1.0
+                    && dev.shot.is_none()
+                    && dev.demo_taps.is_none(),
+            ),
+            typing: None,
+            asking_name: false,
             keystones: KeystoneView::default(),
             detail: None,
             biomes_open: false,
@@ -318,7 +349,12 @@ impl App {
             game,
             settings,
             dev,
+        };
+        // A capture of the board needs it loaded by then.
+        if app.dev.shot_is(ShotKind::Leaderboard) {
+            app.open_page(Mode::Leaderboard);
         }
+        app
     }
 
     /// Wall clock, so time with the app closed still counts.
@@ -342,6 +378,8 @@ impl App {
             supported: notify::supported(),
             allowed: self.notify_allowed,
             brightness: self.settings.brightness,
+            name: self.settings.name.clone(),
+            typing: self.typing.clone(),
         }
     }
 
@@ -402,10 +440,26 @@ impl App {
             self.sync_notify(now);
         }
 
-        if is_key_pressed(KeyCode::Escape) {
+        if self.typing.is_some() {
+            self.type_name();
+        } else if is_key_pressed(KeyCode::Escape) {
             self.save();
             return false;
         }
+        if self.asking_name {
+            self.ask_name();
+        }
+        let score = Score {
+            name: self.settings.name.clone(),
+            rad: self.game.rad,
+            species: self.game.species_ever() as u32,
+            animal: self.game.showcase(),
+        };
+        self.leaderboard.update(
+            &self.settings.player_id,
+            &score,
+            macroquad::miniquad::date::now(),
+        );
         self.keys(now);
 
         let gesture = self.input.poll();
@@ -428,7 +482,7 @@ impl App {
 
         self.overlay_taps(&mut tap, &gesture, now);
         self.cancel_tap(&mut tap);
-        self.settings_taps(&mut tap, now);
+        self.page_taps(&mut tap, now);
         self.bottom_bar_taps(&mut tap, panel, now);
         match self.mode {
             Mode::Spiral => self.spiral_input(&gesture, tap, panel, dt),
@@ -441,6 +495,12 @@ impl App {
                 }
             }
             Mode::Keystones => self.keystones_input(&gesture, tap),
+            Mode::Leaderboard => {
+                if gesture.drag != Vec2::ZERO {
+                    self.leaderboard.scroll = (self.leaderboard.scroll - gesture.drag.y)
+                        .clamp(0.0, ui::leaderboard_max_scroll(&self.leaderboard));
+                }
+            }
         }
 
         if self.dev.autoplay {
@@ -597,44 +657,141 @@ impl App {
     }
 
     /// The gear opens settings; on the settings screen, every tap stays there.
-    fn settings_taps(&mut self, tap: &mut Option<Vec2>, now: f64) {
+    /// Opens `page` from the top bar; from the other page, it swaps, and
+    /// back still returns to the screen the first one was opened from.
+    fn open_page(&mut self, page: Mode) {
+        if !self.mode.is_page() {
+            self.page_from = self.mode;
+        }
+        self.mode = page;
+        match page {
+            Mode::Settings => self.allowed_timer = 0.0,
+            Mode::Leaderboard => {
+                self.leaderboard.scroll = 0.0;
+                self.leaderboard.refresh(&self.settings.player_id);
+            }
+            _ => {}
+        }
+    }
+
+    /// The trophy and the gear open their pages; on a page, every tap stays
+    /// there (no bottom bar).
+    fn page_taps(&mut self, tap: &mut Option<Vec2>, now: f64) {
         let Some(p) = *tap else { return };
-        if self.mode == Mode::Settings {
-            // Full screen, no bottom bar: nothing below sees the tap.
-            *tap = None;
-            if ui::settings_back_rect().contains(p) || ui::gear_rect().contains(p) {
-                self.mode = self.settings_from;
-            } else if notify::supported() && ui::notify_row_rect().contains(p) {
-                // Turned on but blocked by Android: the text leads to its
-                // settings, the checkbox still turns it off.
-                if ui::notify_blocked(&self.settings_view())
-                    && !ui::notify_checkbox_rect().contains(p)
-                {
-                    notify::open_settings();
-                } else {
-                    self.settings.notify = !self.settings.notify;
-                    if self.settings.notify {
-                        notify::ask();
-                    }
-                    self.allowed_timer = 0.0;
-                    self.sync_notify(now);
-                    if self.dev.persist {
-                        self.settings.save();
-                    }
-                }
-            } else if let Some(plus) = [false, true]
-                .into_iter()
-                .find(|&plus| ui::brightness_button_rect(plus).contains(p))
+        let page = [
+            (ui::gear_rect(), Mode::Settings),
+            (ui::trophy_rect(), Mode::Leaderboard),
+        ]
+        .into_iter()
+        .find(|(r, _)| r.contains(p))
+        .map(|(_, m)| m);
+        if !self.mode.is_page() {
+            if let Some(page) = page {
+                self.open_page(page);
+                *tap = None;
+            }
+            return;
+        }
+        *tap = None;
+        // A name being typed is saved by any tap away from it.
+        if self.typing.is_some() {
+            self.commit_name();
+            if ui::name_button_rect().contains(p) {
+                return;
+            }
+        }
+        if ui::settings_back_rect().contains(p) || page == Some(self.mode) {
+            self.mode = self.page_from;
+        } else if let Some(page) = page {
+            self.open_page(page);
+        } else if self.mode == Mode::Leaderboard {
+            if matches!(self.leaderboard.view, leaderboard::View::Failed) {
+                self.leaderboard.refresh(&self.settings.player_id);
+            }
+        } else {
+            self.settings_page_tap(p, now);
+        }
+    }
+
+    fn settings_page_tap(&mut self, p: Vec2, now: f64) {
+        if ui::name_button_rect().contains(p) {
+            if net::has_text_box() {
+                self.asking_name = true;
+                self.ask_name();
+            } else {
+                self.typing = Some(self.settings.name.clone());
+            }
+        } else if notify::supported() && ui::notify_row_rect().contains(p) {
+            // Turned on but blocked by Android: the text leads to its
+            // settings, the checkbox still turns it off.
+            if ui::notify_blocked(&self.settings_view()) && !ui::notify_checkbox_rect().contains(p)
             {
-                if self.settings.step_brightness(plus) && self.dev.persist {
+                notify::open_settings();
+            } else {
+                self.settings.notify = !self.settings.notify;
+                if self.settings.notify {
+                    notify::ask();
+                }
+                self.allowed_timer = 0.0;
+                self.sync_notify(now);
+                if self.dev.persist {
                     self.settings.save();
                 }
             }
-        } else if ui::gear_rect().contains(p) {
-            self.settings_from = self.mode;
-            self.mode = Mode::Settings;
-            self.allowed_timer = 0.0;
-            *tap = None;
+        } else if let Some(plus) = [false, true]
+            .into_iter()
+            .find(|&plus| ui::brightness_button_rect(plus).contains(p))
+        {
+            if self.settings.step_brightness(plus) && self.dev.persist {
+                self.settings.save();
+            }
+        }
+    }
+
+    /// Takes `raw` as the leaderboard name, if anything usable is left.
+    fn set_name(&mut self, raw: &str) {
+        if let Some(name) = leaderboard::clean_name(raw) {
+            self.settings.name = name;
+            if self.dev.persist {
+                self.settings.save();
+            }
+        }
+    }
+
+    fn commit_name(&mut self) {
+        if let Some(typed) = self.typing.take() {
+            self.set_name(&typed);
+        }
+    }
+
+    /// The platform's text box: answers at once on the web, later on Android.
+    fn ask_name(&mut self) {
+        let current = self.settings.name.clone();
+        if let Some(answer) = net::ask_text("Your name on the leaderboard", &current) {
+            self.asking_name = false;
+            if let Some(name) = answer {
+                self.set_name(&name);
+            }
+        }
+    }
+
+    /// Typing the name on the game's own keyboard: Enter saves, Escape drops.
+    fn type_name(&mut self) {
+        let Some(typed) = &mut self.typing else {
+            return;
+        };
+        while let Some(c) = get_char_pressed() {
+            if leaderboard::name_char(c) && typed.chars().count() < leaderboard::NAME_MAX {
+                typed.push(c);
+            }
+        }
+        if is_key_pressed(KeyCode::Backspace) {
+            typed.pop();
+        }
+        if is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::KpEnter) {
+            self.commit_name();
+        } else if is_key_pressed(KeyCode::Escape) {
+            self.typing = None;
         }
     }
 
@@ -900,6 +1057,9 @@ impl App {
                 ui::draw_bottom_bar(game, now, Some(false), self.choosing, &self.assets);
             }
             Mode::Settings => ui::draw_settings(&self.settings_view(), &self.assets),
+            Mode::Leaderboard => {
+                ui::draw_leaderboard(game, &self.leaderboard, &self.sprites, &self.assets)
+            }
         }
         if game.phase() == Phase::Boon && self.opening.is_none() {
             ui::draw_boons(game, &self.sprites, &self.assets, self.boon_hover);

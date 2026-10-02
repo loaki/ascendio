@@ -1,0 +1,14 @@
+# The Ascendio leaderboard Worker. See README.md for the one-time setup.
+name = "ascendio-scores"
+main = "src/index.js"
+compatibility_date = "2025-01-01"
+
+[vars]
+# Taxa in src/tree.rs: no score can find more. Bump it when the tree grows.
+TAXA = "151"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "ascendio-scores"
+# From `npx wrangler d1 create ascendio-scores`.
+database_id = "125c2f8c-49e5-48bc-a775-6e3b226eb2a9"

@@ -75,9 +75,14 @@ genome) is designed in `docs/DESIGN.md` but not implemented yet.
 - **Map**: the whole discovered tree as a cladogram. Tap a node for its page.
 - **Animal page**: its needs checked against your planet right now, its
   keystone bonus, level, the morphs you own and how many Ma in it evolved.
-- **Keystones**: the equipped slots, then your whole collection to pick from.
-  Animals the planet can't support right now are dimmed; an equipped one
-  shows DORMANT and why.
+- **Keystones**: the equipped slots, then your whole collection to pick from,
+  sorted and filtered from the two dropdowns above it. Animals the planet
+  can't support right now are dimmed; an equipped one shows DORMANT and why.
+- **Leaderboard** (the trophy in the top bar): the top 50 players by RAD,
+  then species found on any Earth, each with the last animal they found;
+  your own row stays pinned at the bottom.
+- **Settings** (the gear): your leaderboard name, notifications and
+  brightness.
 
 ## Engine choice: macroquad
 
@@ -127,7 +132,7 @@ ASCENDIO_TIME_SCALE=3600 cargo run --release
 ASCENDIO_DEV=1 cargo run --release
 
 # Write a PNG of the framebuffer after N seconds and exit, without touching
-# the real save. ASCENDIO_SHOT_MODE=map|spiral|dial|keystones|settings|biomes|collapse|backdrop picks the screen.
+# the real save. ASCENDIO_SHOT_MODE=map|spiral|dial|keystones|settings|leaderboard|biomes|collapse|backdrop picks the screen.
 ASCENDIO_SCRATCH=1 ASCENDIO_SHOT=shot.png ASCENDIO_SHOT_AFTER=2 cargo run --release
 
 # ASCENDIO_SHOT_EVERY=0.0833 also writes every frame (out_000.png, ...) at
@@ -258,6 +263,18 @@ methods the game calls on the activity over JNI). The notification's status
 bar icon is the Ancestor silhouette from `scripts/pixel-art/icon.py`. The
 web and desktop builds show the setting greyed out.
 
+### The leaderboard
+
+`server/` is a Cloudflare Worker and D1 table; its README has the one-time
+setup. The game makes a random player ID and name on first launch (kept with
+the settings, so starting over keeps them), submits its score whenever RAD,
+species, name or last animal change, and retries a minute later when
+offline. `src/net.rs` does the HTTP per platform: `fetch` on the web
+(`web/ascendio.js`), a Java thread on Android (`android/main_activity_inject.java`,
+hence the `INTERNET` permission), `curl` on the desktop. Editing the name
+uses the browser's prompt or an Android dialog; the desktop types into the
+game. Dev runs never submit.
+
 ## Layout
 
 ```
@@ -277,14 +294,16 @@ src/
 ├── ui.rs        HUD, lever panel, bottom bar, keystones, animal page, boons, settings
 ├── settings.rs  the player's settings, saved apart from the game
 ├── notify.rs    the "genome ready" notification (Android, over JNI)
+├── leaderboard.rs  the online board: submitting, fetching, player names
+├── net.rs       HTTP and the name text box, per platform
 ├── render.rs    text helpers, the spiral coil and the map
 ├── tree.rs      the 151-taxon table + Phylogeny
 ├── spiral.rs    the lineage spine, its branch spurs, and the coil's geometry
 ├── layout.rs    tidy left-to-right tree layout for the map
 ├── view.rs      camera (pan/zoom/fit) and gesture recognition
 ├── sprites.rs   pixel art: texture builder, morph recolours, animation
-├── facts.rs     "did you know" trivia shown while time runs
 └── save.rs      where the save data actually lives
+server/          the leaderboard's Cloudflare Worker (see its README)
 docs/
 ├── DESIGN.md      the game design: rules, numbers, the 151 taxa
 └── PHYLOGENY.md   sources, citations, and every simplification we made
@@ -372,8 +391,6 @@ It autosaves every 3 seconds, on every phase change, and on `Esc`.
 
 - The mass extinction and its radiation genome are designed, not built.
 - No audio or haptics yet. The genome opening especially wants sound.
-- No leaderboard: the "most advanced animal" (deepest step) is shown in the
-  HUD, but nothing is shared between players yet.
 - Android build unverified.
 - `Lion` still stands for the whole cat family (Felidae): Tiger, Cat and
   Sabre-tooth hang from it -- see `docs/PHYLOGENY.md`.

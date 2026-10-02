@@ -14,6 +14,11 @@ serde_json = "1.0.151"
 # platform branching of its own.
 quad-storage = "0.1.3"
 
+# The web half of src/net.rs: strings to and from web/ascendio.js. Already
+# pulled in by quad-storage, so the version follows it.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+sapp-jsutils = "0.1.7"
+
 # Small, fast binaries matter on Android.
 [profile.release]
 opt-level = 3
@@ -59,3 +64,7 @@ name = "android.permission.POST_NOTIFICATIONS"
 
 [[package.metadata.android.permission]]
 name = "android.permission.RECEIVE_BOOT_COMPLETED"
+
+# The leaderboard (src/net.rs, server/).
+[[package.metadata.android.permission]]
+name = "android.permission.INTERNET"

@@ -329,6 +329,9 @@ pub struct Game {
     /// The chance that roll had, to show while the genome waits.
     #[serde(default)]
     pub doom_risk: f32,
+    /// The last animal discovered, for the leaderboard.
+    #[serde(default)]
+    pub last_found: Option<usize>,
 }
 
 impl Game {
@@ -370,6 +373,7 @@ impl Game {
             fossil: vec![false; n],
             doomed: false,
             doom_risk: 0.0,
+            last_found: None,
         };
         game.fossil[Phylogeny::ROOT] = true;
         game.refresh_levels();
@@ -404,6 +408,7 @@ impl Game {
             || game.morphs.len() != saved
             || game.found_ma.len() != saved
             || game.keystones.iter().any(|&p| p >= saved)
+            || game.last_found.is_some_and(|t| t >= saved)
         {
             return None;
         }
@@ -1152,6 +1157,7 @@ impl Game {
                 };
                 self.fossil[t] = true;
                 self.found_ma[t] = Some(ma);
+                self.last_found = Some(t);
             } else {
                 self.specimens[t] += if double { 2 } else { 1 };
                 for &k in &starfish {
@@ -1240,6 +1246,18 @@ impl Game {
     /// Fossils: found on an earlier Earth, not yet on this one.
     pub fn is_fossil(&self, taxon: usize) -> bool {
         self.fossil[taxon] && !self.unlocked[taxon]
+    }
+
+    /// Every species found, on this Earth or an earlier one: the
+    /// leaderboard's count, which an ended Earth never lowers.
+    pub fn species_ever(&self) -> usize {
+        self.fossil.iter().filter(|&&f| f).count()
+    }
+
+    /// What the leaderboard shows for this player: the last animal found,
+    /// or the most advanced one for a save from before it was kept.
+    pub fn showcase(&self) -> usize {
+        self.last_found.unwrap_or_else(|| self.most_advanced())
     }
 
     pub fn fossils(&self) -> usize {
@@ -1662,6 +1680,73 @@ mod tests {
         assert_eq!(g.ma_elapsed(2.25 * 3600.0), 22);
         g.skip_cycle(0.0);
         assert_eq!(g.ma_done, 45);
+    }
+
+    #[test]
+    fn a_fresh_game_has_a_score_for_the_leaderboard() {
+        let g = Game::new(0.0);
+        assert_eq!(g.species_ever(), 1, "the Urmetazoan");
+        assert_eq!(g.showcase(), Phylogeny::ROOT);
+        assert_eq!(g.rad, 0);
+    }
+
+    /// Every field the save gained after its format was fixed (they all
+    /// have a default): a save from the earliest release has none of them.
+    const ADDED_SINCE: [&str; 13] = [
+        "ma_done",
+        "wait_hours",
+        "charges",
+        "held",
+        "gone",
+        "edition",
+        "last_launched",
+        "wait_points",
+        "rad",
+        "fossil",
+        "doomed",
+        "doom_risk",
+        "last_found",
+    ];
+
+    #[test]
+    fn a_save_from_the_first_release_loads_with_a_leaderboard_score() {
+        let mut g = Game::new(0.0);
+        let mut now = 0.0;
+        for _ in 0..6 {
+            run_cycle(&mut g, &mut now);
+            g.choose_boon(0);
+        }
+        let mut v: serde_json::Value = serde_json::from_str(&g.to_json()).unwrap();
+        for key in ADDED_SINCE {
+            v.as_object_mut().unwrap().remove(key);
+        }
+        let back = Game::from_json(&v.to_string(), now).expect("an old save loads");
+        assert_eq!(back.discovered(), g.discovered());
+        // No fossil list yet: everything found counts.
+        assert_eq!(back.species_ever(), g.discovered());
+        // No last find kept yet: the most advanced animal stands in.
+        assert_eq!(back.last_found, None);
+        assert_eq!(back.showcase(), back.most_advanced());
+    }
+
+    #[test]
+    fn the_leaderboard_animal_is_the_last_one_found() {
+        let mut g = Game::new(0.0);
+        let mut now = 0.0;
+        let opened = run_cycle(&mut g, &mut now);
+        let last_new = opened
+            .iter()
+            .rev()
+            .find(|o| o.card.new)
+            .map(|o| o.card.taxon);
+        assert!(
+            last_new.is_some(),
+            "the first genome always finds something"
+        );
+        assert!(g.last_found.is_some());
+        assert!(g.unlocked[g.showcase()]);
+        let back = Game::from_json(&g.to_json(), now).unwrap();
+        assert_eq!(back.last_found, g.last_found, "kept in the save");
     }
 
     #[test]
