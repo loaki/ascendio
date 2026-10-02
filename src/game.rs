@@ -89,6 +89,9 @@ pub const DOOM_CHANCE: f32 = 0.2;
 pub const RAD_LUCK: f32 = 5.0;
 pub const RAD_MORPH: f32 = 0.5;
 
+/// `Game::edition`: the player chose this morph rather than the best one.
+const PICKED: u8 = 0x80;
+
 /// Most charges a growing keystone holds.
 const MAX_CHARGES: u8 = 10;
 /// Starfish charges: each a third of a card.
@@ -307,7 +310,9 @@ pub struct Game {
     /// A fragile keystone that left; it can come back once found again.
     #[serde(default)]
     pub gone: Vec<bool>,
-    /// The morph each animal works with as a keystone (`Morph::bit`, 0 none).
+    /// The morph each animal works with as a keystone: `PICKED` and its
+    /// `Morph::bit` (none: 0) once chosen on the MORPH button; without
+    /// `PICKED`, the best one. Saves from before `PICKED` all read as best.
     #[serde(default)]
     pub edition: Vec<u8>,
     /// The planet the last wait ran on, for the keystones that like stasis.
@@ -494,9 +499,37 @@ impl Game {
         BASE_KEYSTONE_SLOTS + (found >= 20) as usize + (found >= 40) as usize
     }
 
-    /// The morph `taxon` works with as a keystone (one it owns, or none).
+    /// The morph `taxon` works with as a keystone: the one picked on the
+    /// MORPH button, or by default its best (`best_edition`).
     pub fn edition(&self, taxon: usize) -> Morph {
-        Morph::from_bit(self.edition[taxon] & self.morphs[taxon])
+        if self.edition_is_best(taxon) {
+            self.best_edition(taxon)
+        } else {
+            Morph::from_bit(self.edition[taxon] & self.morphs[taxon])
+        }
+    }
+
+    /// No morph picked: the keystone wears its best one.
+    pub fn edition_is_best(&self, taxon: usize) -> bool {
+        self.edition[taxon] & PICKED == 0
+    }
+
+    /// The owned morph (or none) that makes the strongest keystone on the
+    /// planet it lives on: awake first, then `Morph::rank`. So an albino
+    /// coat is worn only where it's cool enough, and a melanistic one where
+    /// only it keeps the animal awake.
+    fn best_edition(&self, taxon: usize) -> Morph {
+        std::iter::once(Morph::None)
+            .chain(
+                Morph::ALL
+                    .into_iter()
+                    .filter(|&m| self.owns_morph(taxon, m)),
+            )
+            .max_by(|&a, &b| {
+                let awake = |m| self.own_sleep_with(taxon, m).is_none();
+                awake(a).cmp(&awake(b)).then(a.rank().cmp(&b.rank()))
+            })
+            .unwrap_or(Morph::None)
     }
 
     pub fn owns_morph(&self, taxon: usize, m: Morph) -> bool {
@@ -512,25 +545,28 @@ impl Game {
             .unwrap_or(Morph::None)
     }
 
-    /// Steps `taxon`'s keystone morph to the next one it owns, then none,
-    /// while shaping. Returns whether it changed.
+    /// Steps `taxon`'s keystone morph while shaping: best, then none, then
+    /// each morph it owns, then back to best. Returns whether it changed.
     pub fn cycle_edition(&mut self, taxon: usize) -> bool {
-        if self.phase() != Phase::Shape {
+        if self.phase() != Phase::Shape || self.morphs[taxon] == 0 {
             return false;
         }
-        let owned: Vec<Morph> = std::iter::once(Morph::None)
+        let states: Vec<u8> = [0, PICKED]
+            .into_iter()
             .chain(
                 Morph::ALL
                     .into_iter()
-                    .filter(|&m| self.owns_morph(taxon, m)),
+                    .filter(|&m| self.owns_morph(taxon, m))
+                    .map(|m| PICKED | m.bit()),
             )
             .collect();
-        if owned.len() < 2 {
-            return false;
-        }
-        let cur = self.edition(taxon);
-        let i = owned.iter().position(|&m| m == cur).unwrap_or(0);
-        self.edition[taxon] = owned[(i + 1) % owned.len()].bit();
+        let cur = if self.edition_is_best(taxon) {
+            0
+        } else {
+            PICKED | self.edition(taxon).bit()
+        };
+        let i = states.iter().position(|&s| s == cur).unwrap_or(0);
+        self.edition[taxon] = states[(i + 1) % states.len()];
         true
     }
 
@@ -572,18 +608,17 @@ impl Game {
 
     /// Asleep for reasons of its own: the planet, or its morph.
     fn own_sleep(&self, taxon: usize) -> Option<String> {
+        self.own_sleep_with(taxon, self.edition(taxon))
+    }
+
+    /// As `own_sleep`, wearing `morph`.
+    fn own_sleep_with(&self, taxon: usize, morph: Morph) -> Option<String> {
         let eco = self.phy.taxa[taxon].eco;
         if eco.rule == Rule::Extremes {
             return None;
         }
         let p = self.living_planet();
-        let morph = self.edition(taxon);
-        let colder = if morph == Morph::Melanistic {
-            genome::MELANISTIC_COLDER
-        } else {
-            0
-        };
-        if let Some(why) = eco.needs.missing_colder(&p, colder) {
+        if let Some(why) = eco.needs.missing_with(&p, morph == Morph::Melanistic) {
             return Some(why);
         }
         if morph == Morph::Albino && p.temperature > genome::ALBINO_MAX_TEMP {
@@ -809,6 +844,13 @@ impl Game {
                 None => r.status = Status::Waiting("nothing to copy".into()),
             }
         }
+        // A giant reshapes its world: a point while it's awake, added after
+        // the copies so that none of them copies it.
+        for (r, &k) in out.iter_mut().zip(&ks) {
+            if self.edition(k) == Morph::Giant && !matches!(r.status, Status::Asleep(_)) {
+                r.gains.push(Gain::Points(1));
+            }
+        }
         out
     }
 
@@ -880,7 +922,6 @@ impl Game {
         for k in self.active_keystones() {
             let rule = self.phy.taxa[k].eco.rule;
             let awake = self.dormant_reason(k).is_none();
-            let keeps = self.edition(k) == Morph::Amber;
             let grow = match rule {
                 Rule::Grows(c) => Some(c.holds(&launched)),
                 Rule::Stasis => Some(self.last_launched == Some(launched)),
@@ -890,8 +931,8 @@ impl Game {
                 Some(true) if awake => {
                     self.charges[k] = (self.charges[k] + 1).min(MAX_CHARGES);
                 }
-                Some(_) if !keeps => self.charges[k] = 0,
-                _ => {}
+                Some(_) => self.charges[k] = 0,
+                None => {}
             }
             if let Rule::Fragile(n) = rule {
                 if awake {
@@ -1174,14 +1215,6 @@ impl Game {
             self.gone[t] = false;
             let first_morph = card.morph != Morph::None && !self.owns_morph(t, card.morph);
             self.morphs[t] |= card.morph.bit();
-            // A first morph becomes the keystone's look, unless it costs
-            // something (albino) or only changes reach (melanistic).
-            if first_morph
-                && self.edition[t] == 0
-                && matches!(card.morph, Morph::Giant | Morph::Amber)
-            {
-                self.edition[t] = card.morph.bit();
-            }
             self.level[t] = level_for(self.specimens[t]);
             out.push(Opened {
                 level_after: self.level[t],
@@ -1818,16 +1851,17 @@ mod tests {
     }
 
     #[test]
-    fn amber_keeps_its_charges() {
+    fn amber_doubles_the_bonus_and_charges_reset_as_usual() {
         let mut g = Game::new(0.0);
         g.planet = REEF;
         let coral = equip(&mut g, "Coral");
+        g.charges[coral] = 4;
+        let plain = luck(&report(&g, coral));
         g.morphs[coral] = Morph::Amber.bit();
-        g.edition[coral] = Morph::Amber.bit();
-        g.advance_keystones(REEF);
+        assert_eq!(luck(&report(&g, coral)), plain * 2.0);
         g.planet.temperature = 1;
         g.advance_keystones(g.planet);
-        assert_eq!(g.charges[coral], 1);
+        assert_eq!(g.charges[coral], 0, "no longer kept through a cold wait");
     }
 
     #[test]
@@ -1877,7 +1911,7 @@ mod tests {
     }
 
     #[test]
-    fn albinos_sunburn_and_melanistic_coats_live_colder() {
+    fn albinos_sunburn_and_melanistic_coats_ignore_temperature() {
         let mut g = Game::new(0.0);
         g.planet = Planet {
             land: 3,
@@ -1888,13 +1922,76 @@ mod tests {
         };
         let ape = equip(&mut g, "Ape");
         g.morphs[ape] = Morph::Albino.bit() | Morph::Melanistic.bit();
-        g.edition[ape] = Morph::Albino.bit();
+        g.edition[ape] = PICKED | Morph::Albino.bit();
         assert!(g.dormant_reason(ape).unwrap().contains("albino"));
-        g.edition[ape] = Morph::Melanistic.bit();
-        g.planet.temperature = 1;
-        assert_eq!(g.dormant_reason(ape), None, "two steps colder");
-        g.edition[ape] = 0;
+        g.edition[ape] = PICKED | Morph::Melanistic.bit();
+        g.planet.temperature = 0;
+        assert_eq!(g.dormant_reason(ape), None, "a Snowball ape");
+        g.edition[ape] = PICKED;
         assert_eq!(g.dormant_reason(ape).as_deref(), Some("too cold"));
+    }
+
+    #[test]
+    fn the_best_morph_is_the_strongest_that_stays_awake() {
+        let mut g = Game::new(0.0);
+        g.planet = Planet {
+            land: 3,
+            vegetation: 3,
+            oxygen: 3,
+            temperature: 2,
+            volcanism: 0,
+        };
+        let ape = equip(&mut g, "Ape");
+        assert_eq!(g.edition(ape), Morph::None, "nothing owned");
+        g.morphs[ape] = Morph::Giant.bit() | Morph::Albino.bit() | Morph::Melanistic.bit();
+        assert!(g.edition_is_best(ape));
+        g.planet.temperature = 3;
+        assert_eq!(g.edition(ape), Morph::Giant, "too warm for an albino");
+        g.planet.temperature = 1;
+        assert_eq!(g.edition(ape), Morph::Melanistic, "only it lives this cold");
+        assert_eq!(g.dormant_reason(ape), None);
+        g.morphs[ape] |= Morph::Amber.bit();
+        g.planet.temperature = 3;
+        assert_eq!(g.edition(ape), Morph::Amber);
+        // A bear lives at Cool, where an albino coat is fine and strongest.
+        let bear = equip(&mut g, "Bear");
+        g.morphs[bear] = Morph::Giant.bit() | Morph::Albino.bit();
+        g.planet.temperature = 2;
+        assert_eq!(g.dormant_reason(bear), None);
+        assert_eq!(g.edition(bear), Morph::Albino);
+    }
+
+    #[test]
+    fn a_giant_keystone_gives_an_adjustment_point_no_copier_takes() {
+        let mut g = Game::new(0.0);
+        g.planet = REEF;
+        let coral = equip(&mut g, "Coral");
+        g.charges[coral] = 4;
+        let base = g.max_points();
+        g.morphs[coral] = Morph::Giant.bit();
+        assert_eq!(g.edition(coral), Morph::Giant);
+        assert_eq!(g.max_points(), base + 1);
+        let octo = equip(&mut g, "Octopus");
+        let copied = report(&g, octo);
+        assert_eq!(copied.note.as_deref(), Some("copying Coral"));
+        assert!(!copied.gains.contains(&Gain::Points(1)), "{copied:?}");
+        assert_eq!(g.max_points(), base + 1, "the octopus adds no point");
+        // Asleep, a giant gives nothing either.
+        g.planet.temperature = 0;
+        assert!(g.dormant_reason(coral).is_some());
+        assert!(!report(&g, coral).gains.contains(&Gain::Points(1)));
+    }
+
+    #[test]
+    fn a_save_from_before_picking_wears_the_best_morph() {
+        let mut g = Game::new(0.0);
+        let t = equip(&mut g, "Urmetazoan");
+        g.morphs[t] = Morph::Giant.bit() | Morph::Amber.bit();
+        // What older builds stored: a bare morph bit, or nothing.
+        for old in [0, Morph::Giant.bit()] {
+            g.edition[t] = old;
+            assert_eq!(g.edition(t), Morph::Amber, "{old}");
+        }
     }
 
     #[test]
@@ -1903,12 +2000,21 @@ mod tests {
         let t = equip(&mut g, "Urmetazoan");
         assert!(!g.cycle_edition(t), "nothing to pick");
         g.morphs[t] = Morph::Giant.bit() | Morph::Amber.bit();
-        assert!(g.cycle_edition(t));
-        assert_eq!(g.edition(t), Morph::Giant);
-        g.cycle_edition(t);
-        assert_eq!(g.edition(t), Morph::Amber);
-        g.cycle_edition(t);
-        assert_eq!(g.edition(t), Morph::None);
+        assert_eq!(g.edition(t), Morph::Amber, "best by default");
+        let mut seen = Vec::new();
+        for _ in 0..4 {
+            assert!(g.cycle_edition(t));
+            seen.push((g.edition_is_best(t), g.edition(t)));
+        }
+        assert_eq!(
+            seen,
+            [
+                (false, Morph::None),
+                (false, Morph::Giant),
+                (false, Morph::Amber),
+                (true, Morph::Amber),
+            ]
+        );
     }
 
     #[test]

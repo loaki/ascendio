@@ -232,18 +232,20 @@ bonuses, with no cap.
 
 Any card can be a morph, rolled independently. Morphs never change what
 the animal is; like card editions, they change what it does as a
-keystone. The rarer, the stronger:
+keystone, each in its own way:
 
 | Morph | Chance | Look | As a keystone |
 |---|---|---|---|
-| Giant | 1/20 | Drawn one size up | ×1.25 its bonus |
+| Giant | 1/20 | Drawn one size up | +1 adjustment point each shaping |
 | Albino | 1/64 | Pale palette, red eyes | ×1.5, but asleep above Cool (sunburn) |
-| Melanistic | 1/64 | Near-black palette | Lives 2 temperature steps colder |
-| Amber | 1/512 | Gold-preserved, prismatic frame | ×2, and keeps its charges while asleep |
+| Melanistic | 1/64 | Near-black palette | Ignores temperature: lives at any |
+| Amber | 1/512 | Gold-preserved, prismatic frame | ×2 its bonus |
 
-The player picks which owned morph each keystone works with (the MORPH
-button on the Keystones screen, while shaping). A first Giant or Amber is
-picked automatically. All the morph multipliers together are capped at ×6,
+By default a keystone wears its BEST morph: of those it owns, the
+strongest that keeps it awake on the planet it lives on (Amber, then an
+Albino where it's Cool or colder, then Giant, then Melanistic, which is what
+keeps an animal awake at a temperature it can't live at). The MORPH button on the Keystones screen
+cycles BEST, NONE and each owned morph, while shaping, to pick one instead. All the morph multipliers together are capped at ×6,
 or nearly every card would morph.
 
 At Oxygen 5, the Giant chance for arthropods is ×3 (Meganeura: 71 cm

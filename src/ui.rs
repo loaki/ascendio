@@ -469,7 +469,7 @@ fn shape_hint(game: &Game) -> (String, Color) {
         .into_iter()
         .filter(|b| !here.contains(b))
         .filter_map(|b| {
-            let why = b.ranges().missing(&game.planet, 0)?;
+            let why = b.ranges().missing(&game.planet, false)?;
             Some(format!("{}: {why}", b.name()))
         })
         .take(2)
@@ -1725,10 +1725,15 @@ pub fn draw_keystones(
                 let can = game.phase() == Phase::Shape;
                 let m = game.edition(t);
                 frame(b, PANEL, if can { CYAN } else { PANEL_EDGE }, 1.0);
-                let label = if m == Morph::None {
-                    "MORPH: NONE".to_string()
+                let name = if m == Morph::None {
+                    "NONE".to_string()
                 } else {
-                    format!("MORPH: {}", m.name().to_uppercase())
+                    m.name().to_uppercase()
+                };
+                let label = if game.edition_is_best(t) {
+                    format!("MORPH: BEST ({name})")
+                } else {
+                    format!("MORPH: {name}")
                 };
                 text_centered(
                     &label,
@@ -2099,7 +2104,7 @@ pub fn draw_biomes(game: &Game, sprites: &Sprites) {
             fit_px(&recipe, w, px * 0.75),
             TEXT,
         );
-        let (status, status_col) = match b.ranges().missing(p, 0) {
+        let (status, status_col) = match b.ranges().missing(p, false) {
             None => ("Your planet is this biome".to_string(), ACCENT_OK),
             Some(why) => (format!("Your planet: {why}"), LOCKED_TEXT),
         };

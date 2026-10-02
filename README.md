@@ -48,7 +48,7 @@ how to run it.
    in 5 ends the Earth (`src/collapse.rs`): a new Earth starts from the
    Urmetazoan with +1 RAD (rarer cards, more morphs), and everything found
    stays as a fossil to find again. A morph changes what it does (Amber x2, Albino
-   x1.5 but sunburns, Melanistic lives colder, Giant x1.25).
+   x1.5 but sunburns, Melanistic ignores temperature, Giant +1 adjustment point).
 
 What a genome can hold is filtered twice (`src/genome.rs`): the tree
 (parent found, itself not) and the planet (each taxon's habitat and needs

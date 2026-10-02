@@ -331,11 +331,12 @@ impl Needs {
 
     /// The first unmet need, as a short hint ("needs fresh water").
     pub fn missing(&self, p: &Planet) -> Option<String> {
-        self.missing_colder(p, 0)
+        self.missing_with(p, false)
     }
 
-    /// As `missing`, living `colder` temperature steps below the usual.
-    pub fn missing_colder(&self, p: &Planet, colder: u8) -> Option<String> {
+    /// As `missing`; `any_temperature` lives at every temperature (a
+    /// melanistic coat).
+    pub fn missing_with(&self, p: &Planet, any_temperature: bool) -> Option<String> {
         if !self.habitats.iter().any(|&h| p.has(h)) {
             let names: Vec<_> = self
                 .habitats
@@ -344,7 +345,7 @@ impl Needs {
                 .collect();
             return Some(format!("needs {}", names.join(" or ")));
         }
-        let why = self.ranges.missing(p, colder)?;
+        let why = self.ranges.missing(p, any_temperature)?;
         Some(match self.biome {
             Some(b) => format!("{} only: {why}", b.name()),
             None => why.to_string(),
@@ -742,16 +743,23 @@ mod tests {
     }
 
     #[test]
-    fn a_melanistic_coat_lives_colder() {
-        let cool = Planet {
-            land: 3,
-            vegetation: 3,
-            temperature: 1,
-            ..Planet::default()
-        };
+    fn a_melanistic_coat_lives_at_any_temperature() {
         let ape = of("Ape").needs;
-        assert!(ape.missing(&cool).is_some());
-        assert!(ape.missing_colder(&cool, 2).is_none());
+        // Too cold, too cold, fine, too hot (fur).
+        for temperature in [0, 1, 3, 5] {
+            let p = Planet {
+                land: 3,
+                vegetation: 3,
+                temperature,
+                ..Planet::default()
+            };
+            assert_eq!(temperature == 3, ape.missing(&p).is_none(), "{temperature}");
+            assert!(ape.missing_with(&p, true).is_none(), "{temperature}");
+        }
+        // Only the temperature: a biome's other levers still hold.
+        let lion = of("Lion").needs;
+        let sea = Planet::default();
+        assert!(lion.missing_with(&sea, true).is_some());
     }
 
     /// `cargo test print_best_planets -- --ignored --nocapture`: the planets

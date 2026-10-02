@@ -77,14 +77,25 @@ impl Morph {
         }
     }
 
-    /// Keystone-bonus multiplier, like a card edition: the rarer, the
-    /// stronger. Melanistic pays in reach instead (it lives colder).
+    /// Keystone-bonus multiplier, like a card edition. Giant and
+    /// Melanistic pay another way: an adjustment point, and any
+    /// temperature.
     pub fn strength(self) -> f32 {
         match self {
-            Morph::None | Morph::Melanistic => 1.0,
-            Morph::Giant => 1.25,
+            Morph::None | Morph::Giant | Morph::Melanistic => 1.0,
             Morph::Albino => 1.5,
             Morph::Amber => 2.0,
+        }
+    }
+
+    /// How good it is as a keystone, all else equal, for the BEST pick.
+    pub fn rank(self) -> u8 {
+        match self {
+            Morph::None => 0,
+            Morph::Melanistic => 1,
+            Morph::Giant => 2,
+            Morph::Albino => 3,
+            Morph::Amber => 4,
         }
     }
 
@@ -92,16 +103,14 @@ impl Morph {
     pub fn effect(self) -> &'static str {
         match self {
             Morph::None => "No morph",
-            Morph::Giant => "x1.25 its bonus",
+            Morph::Giant => "+1 adjustment point",
             Morph::Albino => "x1.5, asleep above Cool",
-            Morph::Melanistic => "Lives 2 steps colder",
-            Morph::Amber => "x2 its bonus, keeps charges",
+            Morph::Melanistic => "Ignores temperature",
+            Morph::Amber => "x2 its bonus",
         }
     }
 }
 
-/// Temperature steps a melanistic keystone lives below its kind.
-pub const MELANISTIC_COLDER: u8 = 2;
 /// Above this temperature an albino keystone sunburns and sleeps.
 pub const ALBINO_MAX_TEMP: u8 = 2;
 /// The morph multiplier's cap: past it nearly every card would morph.

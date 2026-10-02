@@ -237,19 +237,17 @@ impl Ranges {
     }
 
     pub fn contains(&self, p: &Planet) -> bool {
-        self.missing(p, 0).is_none()
+        self.missing(p, false).is_none()
     }
 
     /// The first lever out of range, as a short hint ("too cold").
-    /// `colder` widens the cold end (a melanistic coat).
-    pub fn missing(&self, p: &Planet, colder: u8) -> Option<&'static str> {
+    /// `any_temperature` skips the Temperature range (a melanistic coat).
+    pub fn missing(&self, p: &Planet, any_temperature: bool) -> Option<&'static str> {
         let out = |lever: Lever| {
+            if any_temperature && lever == Lever::Temperature {
+                return (false, false);
+            }
             let (lo, hi) = self.get(lever);
-            let lo = if lever == Lever::Temperature {
-                lo.saturating_sub(colder)
-            } else {
-                lo
-            };
             let v = p.get(lever);
             (v < lo, v > hi)
         };
