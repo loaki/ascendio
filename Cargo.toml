@@ -50,3 +50,12 @@ icon = "@mipmap/ic_launcher"
 "android:screenOrientation" = "portrait"
 # Dark, no title bar: light status-bar icons over the game's dark top bar.
 "android:theme" = "@android:style/Theme.DeviceDefault.NoActionBar"
+
+# The "genome ready" notification (src/notify.rs, quad.toml): Android 13+
+# asks the player before the app may post one, and the scheduled job survives
+# a reboot. Its job service is declared in quad.toml.
+[[package.metadata.android.permission]]
+name = "android.permission.POST_NOTIFICATIONS"
+
+[[package.metadata.android.permission]]
+name = "android.permission.RECEIVE_BOOT_COMPLETED"

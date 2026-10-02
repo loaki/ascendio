@@ -5,6 +5,8 @@ use std::sync::MutexGuard;
 use quad_storage::LocalStorage;
 
 const KEY: &str = "ascendio_save_v1";
+/// Settings live apart from the game, so starting over keeps them.
+const SETTINGS_KEY: &str = "ascendio_settings_v1";
 
 /// `quad_storage` keeps `local.data` in the working directory, which on
 /// Android is `/` and read-only (the write panics). Move into the app's own
@@ -32,4 +34,12 @@ pub fn read() -> Option<String> {
 
 pub fn clear() {
     storage().remove(KEY);
+}
+
+pub fn write_settings(json: &str) {
+    storage().set(SETTINGS_KEY, json);
+}
+
+pub fn read_settings() -> Option<String> {
+    storage().get(SETTINGS_KEY)
 }

@@ -8,11 +8,13 @@ mod game;
 mod genome;
 mod genome_bg;
 mod layout;
+mod notify;
 mod opening;
 mod pixel;
 mod planet;
 mod render;
 mod save;
+mod settings;
 mod spiral;
 mod sprites;
 mod tree;
@@ -27,9 +29,10 @@ use game::{Game, Phase};
 use layout::Layout;
 use opening::Opening;
 use planet::Lever;
+use settings::Settings;
 use spiral::{Frame, Nav};
 use sprites::Sprites;
-use ui::{Assets, KeystoneView};
+use ui::{Assets, KeystoneView, SettingsView};
 use view::{Camera, Input};
 
 /// How hard you have to pinch closed before the map opens.
@@ -40,6 +43,7 @@ enum Mode {
     Spiral,
     Map,
     Keystones,
+    Settings,
 }
 
 /// Seconds between autosaves.
@@ -76,7 +80,7 @@ struct Dev {
     /// `ASCENDIO_DEMO_TAPS=n`: start on a ready genome and tap it `n` times.
     demo_taps: Option<u32>,
     /// `ASCENDIO_SHOT=out.png`, `ASCENDIO_SHOT_AFTER` (default 5) and
-    /// `ASCENDIO_SHOT_MODE=map|spiral|dial|keystones`.
+    /// `ASCENDIO_SHOT_MODE=map|spiral|dial|keystones|settings`.
     shot: Option<Shot>,
 }
 
@@ -91,6 +95,7 @@ impl Dev {
                 Some("map") => Some(Mode::Map),
                 Some("spiral" | "dial") => Some(Mode::Spiral),
                 Some("keystones") => Some(Mode::Keystones),
+                Some("settings") => Some(Mode::Settings),
                 _ => None,
             },
             dial: shot_mode.as_deref() == Some("dial"),
@@ -171,6 +176,17 @@ async fn main() {
         game.planet = p;
         game.shaped_from = p;
     }
+    let mut settings = if dev.persist {
+        Settings::load()
+    } else {
+        Settings::default()
+    };
+    notify::sync(&game, settings.notify, now(), dev.time_scale);
+    // Asked of Android once a second while settings are open.
+    let mut notify_allowed = false;
+    let mut allowed_timer = 0.0f32;
+    // Where the back arrow returns to.
+    let mut settings_from = Mode::Spiral;
     let demo_taps = dev.demo_taps;
     if demo_taps.is_some() {
         game.step_lever(Lever::Oxygen, 1);
@@ -218,6 +234,7 @@ async fn main() {
             choosing &= last_phase == Phase::Shape;
             cancel_armed = false;
             save(&game);
+            notify::sync(&game, settings.notify, t_now, dev.time_scale);
         }
 
         if is_key_pressed(KeyCode::Escape) {
@@ -319,6 +336,33 @@ async fn main() {
                 tap = None;
             } else if cancel_armed {
                 cancel_armed = false;
+            }
+        }
+        if let Some(p) = tap {
+            if mode == Mode::Settings {
+                // Full screen, no bottom bar: nothing below sees the tap.
+                tap = None;
+                if ui::settings_back_rect().contains(p) || ui::gear_rect().contains(p) {
+                    mode = settings_from;
+                } else if notify::supported() && ui::notify_row_rect().contains(p) {
+                    settings.notify = !settings.notify;
+                    if settings.notify {
+                        notify::ask();
+                    }
+                    allowed_timer = 0.0;
+                    notify::sync(&game, settings.notify, t_now, dev.time_scale);
+                    if dev.persist {
+                        settings.save();
+                    }
+                } else if ui::notify_status_rect().contains(p) && settings.notify && !notify_allowed
+                {
+                    notify::open_settings();
+                }
+            } else if ui::gear_rect().contains(p) {
+                settings_from = mode;
+                mode = Mode::Settings;
+                allowed_timer = 0.0;
+                tap = None;
             }
         }
         if let Some(p) = tap {
@@ -461,6 +505,13 @@ async fn main() {
                 }
                 cam.clamp_to(layout.min, layout.max);
             }
+            Mode::Settings => {
+                allowed_timer -= dt;
+                if allowed_timer <= 0.0 {
+                    allowed_timer = 1.0;
+                    notify_allowed = notify::allowed();
+                }
+            }
             Mode::Keystones => {
                 if gesture.drag != Vec2::ZERO {
                     keystones.scroll = (keystones.scroll - gesture.drag.y)
@@ -533,7 +584,7 @@ async fn main() {
                 }
                 let frame = Frame::build(&game, &nav, &measure);
                 render::draw_spiral(&game, &frame, nav.t, nav.last(), &sprites);
-                ui::draw_hud(&game, t_now);
+                ui::draw_hud(&game, t_now, &assets);
                 if choosing {
                     ui::draw_wait_panel(&game, &sprites);
                 } else {
@@ -543,12 +594,20 @@ async fn main() {
             }
             Mode::Map => {
                 render::draw_map(&game, &layout, &cam, &sprites);
-                ui::draw_hud(&game, t_now);
+                ui::draw_hud(&game, t_now, &assets);
                 ui::draw_bottom_bar(&game, t_now, Some(true), choosing, &assets);
             }
             Mode::Keystones => {
                 ui::draw_keystones(&game, t_now, &keystones, &sprites, &assets);
                 ui::draw_bottom_bar(&game, t_now, Some(false), choosing, &assets);
+            }
+            Mode::Settings => {
+                let view = SettingsView {
+                    notify: settings.notify,
+                    supported: notify::supported(),
+                    allowed: notify_allowed,
+                };
+                ui::draw_settings(&view, &assets);
             }
         }
         if game.phase() == Phase::Boon && opening.is_none() {

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Renders the Android launcher icon (the "Ancestor" glyph) into android/res/.
+"""Renders the Android launcher icon (the "Ancestor" glyph) into android/res/,
+plus its white silhouette for the "genome ready" notification.
 
     python3 scripts/pixel-art/icon.py
 """
@@ -31,6 +32,15 @@ def sprite():
     return img
 
 
+def silhouette(spr):
+    out = Image.new("RGBA", spr.size)
+    for y in range(GRID):
+        for x in range(GRID):
+            if spr.getpixel((x, y))[3]:
+                out.putpixel((x, y), (255, 255, 255, 255))
+    return out
+
+
 def centred(spr, size, scale, bg):
     out = Image.new("RGBA", (size, size), bg)
     big = spr.resize((GRID * scale,) * 2, Image.NEAREST)
@@ -53,6 +63,9 @@ def main():
               centred(spr, int(108 * k), int(4 * k), (0, 0, 0, 0)))
         # Legacy icon (Android 7): 48dp, background baked in.
         write(os.path.join(d, "ic_launcher.png"), centred(spr, int(48 * k), int(2 * k), BG + (255,)))
+        # Status bar icon: 24dp, white on transparent (Android only uses the alpha).
+        write(os.path.join(RES, f"drawable-{name}", "ic_stat_genome.png"),
+              centred(silhouette(spr), int(24 * k), int(k), (0, 0, 0, 0)))
     write_text(os.path.join(RES, "mipmap-anydpi-v26", "ic_launcher.xml"), """\
 <?xml version="1.0" encoding="utf-8"?>
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">

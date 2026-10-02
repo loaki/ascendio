@@ -25,6 +25,52 @@ pub const LIME: Color = rgb(0xC5F76A);
 /// Textures the UI draws with, built once (they need a GL context).
 pub struct Assets {
     pub glow: Texture2D,
+    /// The settings gear, idle and lit.
+    pub gear: [Texture2D; 2],
+}
+
+/// The settings gear, 16x16, lit from the top left: `l` light, `b` base,
+/// `d` shadow, `k` ink.
+const GEAR: [&str; 16] = [
+    "......kkkk......",
+    "......kllk......",
+    "..kk..kllk..kk..",
+    ".kllkklllbkkbbk.",
+    "..klllllbbbbbk..",
+    "...kllkkkkbbk...",
+    "kkkllk....kbbkkk",
+    "kllllk....kbdddk",
+    "klllbk....kddddk",
+    "kkkbbk....kddkkk",
+    "...kbbkkkkddk...",
+    "..kbbbbbdddddk..",
+    ".kbbkkbdddkkddk.",
+    "..kk..kddk..kk..",
+    "......kddk......",
+    "......kkkk......",
+];
+
+/// Light, base, shadow and ink: steel when idle, the DNA blue when lit.
+const GEAR_INKS: [[u32; 4]; 2] = [
+    [0xE6F0F6, 0xB8CAD6, 0x8CA0B2, 0x101420],
+    [0xBFE8F0, 0x5BC8F5, 0x2F7F92, 0x0E242C],
+];
+
+fn gear_texture(inks: [u32; 4]) -> Texture2D {
+    let mut buf = vec![0u8; 16 * 16 * 4];
+    for (y, row) in GEAR.iter().enumerate() {
+        for (x, ch) in row.bytes().enumerate() {
+            let Some(i) = b"lbdk".iter().position(|&c| c == ch) else {
+                continue;
+            };
+            let c = inks[i];
+            let o = (y * 16 + x) * 4;
+            buf[o..o + 4].copy_from_slice(&[(c >> 16) as u8, (c >> 8) as u8, c as u8, 255]);
+        }
+    }
+    let tex = Texture2D::from_rgba8(16, 16, &buf);
+    tex.set_filter(FilterMode::Nearest);
+    tex
 }
 
 impl Assets {
@@ -43,7 +89,10 @@ impl Assets {
         let glow = Texture2D::from_rgba8(n as u16, n as u16, &buf);
         glow.set_filter(FilterMode::Linear);
 
-        Self { glow }
+        Self {
+            glow,
+            gear: GEAR_INKS.map(gear_texture),
+        }
     }
 
     pub fn glow(&self, c: Vec2, r: f32, color: Color, alpha: f32) {
@@ -114,33 +163,54 @@ pub fn best_morph(game: &Game, taxon: usize) -> Morph {
 
 // --- top HUD ------------------------------------------------------------------
 
-pub fn draw_hud(game: &Game, now: f64) {
-    let sw = screen_width();
+/// The settings gear, at the right end of the top bar.
+pub fn gear_rect() -> Rect {
     let bar_h = render::bar_height();
-    let px = bar_h * 0.34;
+    let s = bar_h * 0.62;
+    Rect::new(screen_width() - s - bar_h * 0.19, (bar_h - s) * 0.5, s, s)
+}
+
+/// The gear in its box; `lit` while settings are open.
+fn draw_gear(assets: &Assets, lit: bool) {
+    let r = gear_rect();
+    if lit {
+        frame(r, rgb(0x12303A), ACCENT_DNA, 1.0);
+    } else {
+        frame(r, PANEL, EDGE, 1.0);
+    }
+    // A whole number of texels per pixel keeps the pixel art crisp.
+    let s = ((r.w * 0.72 / 16.0).floor().max(1.0) * 16.0).round();
+    draw_texture_ex(
+        &assets.gear[lit as usize],
+        (r.x + (r.w - s) * 0.5).round(),
+        (r.y + (r.h - s) * 0.5).round(),
+        WHITE,
+        DrawTextureParams {
+            dest_size: Some(vec2(s, s)),
+            ..Default::default()
+        },
+    );
+}
+
+fn draw_top_bar() {
+    let (sw, bar_h) = (screen_width(), render::bar_height());
     draw_rectangle(0.0, 0.0, sw, bar_h, HUD_BG);
     draw_line(0.0, bar_h, sw, bar_h, 1.0, EDGE);
-    // The build (`make apk` sets ASCENDIO_VERSION) and the screen the game
-    // actually got, so a phone screenshot says what it's running.
-    let build = format!(
-        "{}  {}x{}",
-        option_env!("ASCENDIO_VERSION").unwrap_or("dev"),
-        sw as u32,
-        screen_height() as u32
-    );
-    let bpx = px * 0.5;
+}
+
+pub fn draw_hud(game: &Game, now: f64, assets: &Assets) {
+    let bar_h = render::bar_height();
+    let px = bar_h * 0.34;
+    draw_top_bar();
+    draw_gear(assets, false);
+    // Text stops short of the gear.
+    let max_w = gear_rect().x - px * 1.4;
+    let head = format!("{} Ma  ·  {}", game.ma_elapsed(now), game.era());
     text(
-        &build,
-        sw - px * 0.7 - text_width(&build, bpx),
-        bar_h * 0.46,
-        bpx,
-        TEXT_DIM,
-    );
-    text(
-        &format!("{} Ma  ·  {}", game.ma_elapsed(now), game.era()),
+        &head,
         px * 0.7,
         bar_h * 0.46,
-        px,
+        fit_px(&head, max_w, px),
         TEXT,
     );
     let best = game.most_advanced();
@@ -155,7 +225,7 @@ pub fn draw_hud(game: &Game, now: f64) {
         &sub,
         px * 0.7,
         bar_h * 0.84,
-        fit_px(&sub, sw * 0.9, px * 0.72),
+        fit_px(&sub, max_w, px * 0.72),
         TEXT_DIM,
     );
 }
@@ -1172,7 +1242,7 @@ pub fn draw_keystones(
             );
         }
     }
-    draw_hud(game, now);
+    draw_hud(game, now, assets);
 }
 
 // --- an animal's page ------------------------------------------------------------------
@@ -1418,4 +1488,169 @@ pub fn draw_boons(game: &Game, sprites: &Sprites, assets: &Assets, hover: Option
             col,
         );
     }
+}
+
+// --- settings ---------------------------------------------------------------------------
+
+/// What the settings screen shows besides the settings themselves.
+pub struct SettingsView {
+    pub notify: bool,
+    /// Notifications can be posted here (the Android app).
+    pub supported: bool,
+    /// Android lets the app post them.
+    pub allowed: bool,
+}
+
+/// The back arrow, at the left end of the top bar.
+pub fn settings_back_rect() -> Rect {
+    let g = gear_rect();
+    Rect::new(screen_width() - g.x - g.w, g.y, g.w, g.h)
+}
+
+fn settings_panel_rect() -> Rect {
+    let (sw, u) = (screen_width(), u());
+    let y = render::bar_height() + u * 8.0;
+    Rect::new(sw * 0.04, y, sw * 0.92, u * 63.0)
+}
+
+/// The notification row: the checkbox and its labels, all one tap target.
+pub fn notify_row_rect() -> Rect {
+    let (p, u) = (settings_panel_rect(), u());
+    Rect::new(p.x, p.y + u * 16.0, p.w, u * 28.0)
+}
+
+/// The line under the row: what the setting will do, or why it can't.
+pub fn notify_status_rect() -> Rect {
+    let (p, u) = (settings_panel_rect(), u());
+    let row = notify_row_rect();
+    Rect::new(
+        p.x,
+        row.y + row.h + u * 2.0,
+        p.w,
+        p.y + p.h - row.y - row.h - u * 2.0,
+    )
+}
+
+/// Blocked by Android: the status line opens the system settings.
+pub fn notify_blocked(v: &SettingsView) -> bool {
+    v.supported && v.notify && !v.allowed
+}
+
+pub fn draw_settings(view: &SettingsView, assets: &Assets) {
+    clear_background(render::BG);
+    let (sw, sh, u) = (screen_width(), screen_height(), u());
+    let bar_h = render::bar_height();
+
+    draw_top_bar();
+    draw_gear(assets, true);
+    // A chunky pixel chevron for "back".
+    let b = settings_back_rect();
+    let c = vec2(b.x + b.w * 0.5, b.y + b.h * 0.5);
+    let (arm, w) = (b.h * 0.2, (u * 1.5).max(2.0));
+    draw_line(
+        c.x + arm * 0.5,
+        c.y - arm,
+        c.x - arm * 0.5,
+        c.y,
+        w,
+        TEXT_DIM,
+    );
+    draw_line(
+        c.x - arm * 0.5,
+        c.y,
+        c.x + arm * 0.5,
+        c.y + arm,
+        w,
+        TEXT_DIM,
+    );
+    text_centered("SETTINGS", sw * 0.5, bar_h * 0.6, bar_h * 0.36, TEXT);
+
+    let p = settings_panel_rect();
+    frame(p, PANEL, EDGE, 1.0);
+    let x = p.x + u * 6.0;
+    let px = u * 7.5;
+    text("NOTIFICATIONS", x, p.y + u * 10.0, px, ACCENT_WARN);
+
+    // The checkbox: a pixel tick on green when on.
+    let row = notify_row_rect();
+    let s = u * 11.0;
+    let bx = Rect::new(x, row.y + u * 2.0, s, s);
+    let (edge, fill) = match (view.supported, view.notify) {
+        (false, _) => (EDGE, PANEL_LOCKED),
+        (true, true) => (ACCENT_OK, ACCENT_OK),
+        (true, false) => (rgb(0x3E4857), PANEL_LOCKED),
+    };
+    frame(bx, fill, edge, (u * 0.9).max(2.0));
+    if view.notify {
+        let d = s / 11.0;
+        for (cx, cy) in [(2, 5), (3, 6), (4, 7), (5, 6), (6, 5), (7, 4), (8, 3)] {
+            draw_rectangle(
+                bx.x + cx as f32 * d,
+                bx.y + cy as f32 * d,
+                d * 2.0,
+                d * 2.0,
+                render::BG,
+            );
+        }
+    }
+
+    let tx = bx.x + s + u * 6.0;
+    let label_c = if view.supported { TEXT } else { LOCKED_TEXT };
+    text("Genome ready", tx, row.y + u * 9.0, px, label_c);
+    let sub = "Send a notification when a new genome is ready to evolve.";
+    let sub_px = px * 0.8;
+    for (i, line) in wrap_lines(sub, p.x + p.w - u * 5.0 - tx, sub_px)
+        .iter()
+        .enumerate()
+    {
+        text(
+            line,
+            tx,
+            row.y + u * 16.0 + i as f32 * u * 6.5,
+            sub_px,
+            TEXT_DIM,
+        );
+    }
+
+    let st = notify_status_rect();
+    // A dashed rule between the row and its status.
+    let mut dx = x;
+    while dx < p.x + p.w - u * 6.0 {
+        draw_rectangle(dx, st.y, u * 2.0, 1.0, EDGE);
+        dx += u * 4.0;
+    }
+    let (status, col) = if !view.supported {
+        ("Only in the Android app", LOCKED_TEXT)
+    } else if notify_blocked(view) {
+        ("Blocked by Android: tap here to allow", ACCENT_WARN)
+    } else if view.notify {
+        ("ON  ·  one per wait, when time has run", ACCENT_OK)
+    } else {
+        ("OFF  ·  you'll see it when you open the game", LOCKED_TEXT)
+    };
+    text(
+        status,
+        x,
+        st.y + st.h * 0.62,
+        fit_px(status, p.w - u * 12.0, px * 0.8),
+        col,
+    );
+
+    // The build, in the footer: `make apk` sets ASCENDIO_VERSION.
+    let foot = sh - bar_h;
+    draw_line(0.0, foot, sw, foot, 1.0, EDGE);
+    text_centered(
+        "ASCENDIO",
+        sw * 0.5,
+        foot + bar_h * 0.42,
+        bar_h * 0.26,
+        TEXT_DIM,
+    );
+    text_centered(
+        option_env!("ASCENDIO_VERSION").unwrap_or("dev"),
+        sw * 0.5,
+        foot + bar_h * 0.72,
+        bar_h * 0.22,
+        LOCKED_TEXT,
+    );
 }

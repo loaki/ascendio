@@ -116,7 +116,7 @@ ASCENDIO_TIME_SCALE=3600 cargo run --release
 ASCENDIO_DEV=1 cargo run --release
 
 # Write a PNG of the framebuffer after N seconds and exit, without touching
-# the real save. ASCENDIO_SHOT_MODE=map|spiral|dial|keystones picks the screen.
+# the real save. ASCENDIO_SHOT_MODE=map|spiral|dial|keystones|settings picks the screen.
 ASCENDIO_SCRATCH=1 ASCENDIO_SHOT=shot.png ASCENDIO_SHOT_AFTER=2 cargo run --release
 
 # Start on a ready genome and tap the opening N times (0.5 s apart), for
@@ -232,6 +232,18 @@ Android metadata (package name, SDK levels, orientation) lives under
 the fallback is [`xbuild`](https://github.com/rust-mobile/xbuild), which
 targets current NDKs.
 
+### The "genome ready" notification
+
+Off by default; the player turns it on from the gear in the top bar. The
+game is usually closed when a wait ends, so `src/notify.rs` hands the end of
+the wait to Android's JobScheduler, which posts the notification on time
+(give or take a minute; Doze can push it later). The Java side is spliced in
+by `cargo-quad-apk` through `quad.toml`: `java/com/loaki/ascendio/GenomeJob.java`
+(the job and the notification) and `android/main_activity_inject.java` (the
+methods the game calls on the activity over JNI). The notification's status
+bar icon is the Ancestor silhouette from `scripts/pixel-art/icon.py`. The
+web and desktop builds show the setting greyed out.
+
 ## Layout
 
 ```
@@ -247,7 +259,9 @@ src/
 ├── genome_bg.rs the abyss and supernova light behind the opening
 ├── backdrop.rs  the pixel-art planet cross-section behind the spiral
 ├── pixel.rs     the dithered low-res canvas both backdrops paint into
-├── ui.rs        HUD, lever panel, bottom bar, keystones, animal page, boons
+├── ui.rs        HUD, lever panel, bottom bar, keystones, animal page, boons, settings
+├── settings.rs  the player's settings, saved apart from the game
+├── notify.rs    the "genome ready" notification (Android, over JNI)
 ├── render.rs    text helpers, the spiral coil and the map
 ├── tree.rs      the 151-taxon table + Phylogeny
 ├── spiral.rs    the lineage spine, its branch spurs, and the coil's geometry

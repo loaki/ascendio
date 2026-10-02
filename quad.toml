@@ -1,0 +1,11 @@
+# Read by cargo-quad-apk (`make apk`): Java added to the Android build for
+# the "genome ready" notification (src/notify.rs).
+main_activity_inject = "android/main_activity_inject.java"
+java_files = ["java/com/loaki/ascendio/GenomeJob.java"]
+# Each name becomes <service android:name="..." android:enabled="true">.
+# JobScheduler refuses a job service that doesn't require BIND_JOB_SERVICE,
+# and the tool has no field for that, so the attributes ride in on the
+# name's quotes.
+java_services = [
+    '.GenomeJob" android:permission="android.permission.BIND_JOB_SERVICE" android:exported="false',
+]
