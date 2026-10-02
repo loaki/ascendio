@@ -6,7 +6,8 @@ use serde::{Deserialize, Serialize};
 /// Highest level of every lever but `Volcanism`.
 pub const LEVEL_MAX: u8 = 5;
 pub const VOLCANISM_MAX: u8 = 2;
-/// Points to spend per cycle before keystones.
+/// Points to spend on the first shaping and after the tutorial cycles;
+/// after that the wait just run decides (`wait::points`).
 pub const BASE_POINTS: u8 = 3;
 /// The first cycles run for a fixed 1 and 20 minutes, to teach the loop;
 /// after them the player picks the wait on the dial.
@@ -162,6 +163,217 @@ impl Planet {
             p.set(Lever::Vegetation, p.vegetation + soil);
         }
         p
+    }
+}
+
+impl Planet {
+    /// How much of the planet each habitat covers, summing to 1 (indexed by
+    /// `Habitat::index`). A taxon's odds follow its habitat's share, so land
+    /// and vegetation decide what turns up, not only what can.
+    pub fn habitat_shares(&self) -> [f32; 6] {
+        use Habitat::*;
+        let mut w = [0.0f32; 6];
+        let land = self.land as f32;
+        if self.has(Sea) {
+            w[Sea.index()] = (LEVEL_MAX as f32 - land) * 2.0;
+        }
+        if self.has(Reef) {
+            // The reef takes half of the shallow sea.
+            let reef = w[Sea.index()] * 0.5;
+            w[Reef.index()] = reef;
+            w[Sea.index()] -= reef;
+        }
+        if self.has(Shore) {
+            w[Shore.index()] = 1.5;
+        }
+        if self.has(Fresh) {
+            w[Fresh.index()] = 0.5 + land.min(4.0) * 0.5;
+        }
+        let ground = land * 2.0;
+        let forest = if self.has(Forest) {
+            self.vegetation as f32 / 6.0
+        } else {
+            0.0
+        };
+        w[Forest.index()] = ground * forest;
+        if self.has(Land) {
+            w[Land.index()] = ground * (1.0 - forest);
+        }
+        let total: f32 = w.iter().sum();
+        if total > 0.0 {
+            for x in &mut w {
+                *x /= total;
+            }
+        }
+        w
+    }
+}
+
+/// Inclusive lever ranges a planet must sit in.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Ranges {
+    pub land: (u8, u8),
+    pub vegetation: (u8, u8),
+    pub oxygen: (u8, u8),
+    pub temperature: (u8, u8),
+    pub volcanism: (u8, u8),
+}
+
+impl Ranges {
+    pub const ANY: Ranges = Ranges {
+        land: (0, LEVEL_MAX),
+        vegetation: (0, LEVEL_MAX),
+        oxygen: (0, LEVEL_MAX),
+        temperature: (0, LEVEL_MAX),
+        volcanism: (0, VOLCANISM_MAX),
+    };
+
+    pub fn get(&self, lever: Lever) -> (u8, u8) {
+        match lever {
+            Lever::Land => self.land,
+            Lever::Vegetation => self.vegetation,
+            Lever::Oxygen => self.oxygen,
+            Lever::Temperature => self.temperature,
+            Lever::Volcanism => self.volcanism,
+        }
+    }
+
+    pub fn contains(&self, p: &Planet) -> bool {
+        self.missing(p, 0).is_none()
+    }
+
+    /// The first lever out of range, as a short hint ("too cold").
+    /// `colder` widens the cold end (a melanistic coat).
+    pub fn missing(&self, p: &Planet, colder: u8) -> Option<&'static str> {
+        let out = |lever: Lever| {
+            let (lo, hi) = self.get(lever);
+            let lo = if lever == Lever::Temperature {
+                lo.saturating_sub(colder)
+            } else {
+                lo
+            };
+            let v = p.get(lever);
+            (v < lo, v > hi)
+        };
+        for lever in Lever::ALL {
+            let (low, high) = out(lever);
+            let hint = match (lever, low, high) {
+                (Lever::Land, true, _) => "needs more land",
+                (Lever::Land, _, true) => "needs more sea",
+                (Lever::Vegetation, true, _) => "needs more vegetation",
+                (Lever::Vegetation, _, true) => "needs open ground",
+                (Lever::Oxygen, true, _) => "needs more oxygen",
+                (Lever::Oxygen, _, true) => "too much oxygen",
+                (Lever::Temperature, true, _) => "too cold",
+                (Lever::Temperature, _, true) => "too warm",
+                (Lever::Volcanism, true, _) => "needs volcanoes",
+                (Lever::Volcanism, _, true) => "too volcanic",
+                _ => continue,
+            };
+            return Some(hint);
+        }
+        None
+    }
+}
+
+/// The named worlds animals belong to. Their ranges rule each other out, so
+/// no single planet holds them all.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Biome {
+    Primordial,
+    Reef,
+    IceAge,
+    CoalSwamp,
+    Jungle,
+    Savanna,
+    Hothouse,
+}
+
+impl Biome {
+    pub const ALL: [Biome; 7] = [
+        Biome::Primordial,
+        Biome::Reef,
+        Biome::IceAge,
+        Biome::CoalSwamp,
+        Biome::Jungle,
+        Biome::Savanna,
+        Biome::Hothouse,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Biome::Primordial => "Primordial sea",
+            Biome::Reef => "Reef sea",
+            Biome::IceAge => "Ice age",
+            Biome::CoalSwamp => "Coal swamp",
+            Biome::Jungle => "Jungle",
+            Biome::Savanna => "Savanna",
+            Biome::Hothouse => "Hothouse",
+        }
+    }
+
+    pub fn color(self) -> u32 {
+        match self {
+            Biome::Primordial => 0x97A3B5,
+            Biome::Reef => 0x6FF5E1,
+            Biome::IceAge => 0xBFE8F0,
+            Biome::CoalSwamp => 0xC5F76A,
+            Biome::Jungle => 0x8FC878,
+            Biome::Savanna => 0xE0C27A,
+            Biome::Hothouse => 0xFF8A5A,
+        }
+    }
+
+    pub const fn ranges(self) -> Ranges {
+        let r = Ranges::ANY;
+        match self {
+            Biome::Primordial => Ranges {
+                oxygen: (0, 2),
+                land: (0, 2),
+                ..r
+            },
+            Biome::Reef => Ranges {
+                land: (0, 1),
+                temperature: (3, 4),
+                oxygen: (3, LEVEL_MAX),
+                ..r
+            },
+            Biome::IceAge => Ranges {
+                temperature: (0, 1),
+                ..r
+            },
+            Biome::CoalSwamp => Ranges {
+                oxygen: (5, 5),
+                vegetation: (4, 5),
+                temperature: (3, 4),
+                ..r
+            },
+            Biome::Jungle => Ranges {
+                vegetation: (5, 5),
+                temperature: (4, 4),
+                oxygen: (0, 4),
+                ..r
+            },
+            Biome::Savanna => Ranges {
+                land: (4, LEVEL_MAX),
+                vegetation: (1, 2),
+                temperature: (3, LEVEL_MAX),
+                ..r
+            },
+            Biome::Hothouse => Ranges {
+                temperature: (5, 5),
+                volcanism: (1, VOLCANISM_MAX),
+                ..r
+            },
+        }
+    }
+
+    /// The biomes `p` is, in `ALL` order.
+    pub fn of(p: &Planet) -> Vec<Biome> {
+        Biome::ALL
+            .into_iter()
+            .filter(|b| b.ranges().contains(p))
+            .collect()
     }
 }
 

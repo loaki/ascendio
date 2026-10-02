@@ -9,8 +9,16 @@ pub const MAX_HOURS: f32 = 6.0;
 pub const STEP_HOURS: f32 = 0.5;
 pub const DEFAULT_HOURS: f32 = 4.0;
 pub const MA_PER_HOUR: f32 = 10.0;
-/// The tutorial cycles (1 and 20 minutes) pay like a wait this long.
+/// The tutorial cycles (1 and 20 minutes) pay like a wait this long...
 pub const TUTORIAL_HOURS: f32 = 3.0;
+/// ...but with this many cards, so the first genomes fill the tree.
+pub const TUTORIAL_CARDS: f32 = 3.0;
+/// Cards at 2h, 4h and 6h; half hours in between are interpolated, the
+/// fraction being the chance of one more.
+const CARDS_AT: [(f32, f32); 3] = [(2.0, 1.0), (4.0, 2.0), (6.0, 5.0)];
+/// Adjustment points for the next shaping at 2h, 4h and 6h; half hours in
+/// between round down.
+const POINTS_AT: [(f32, f32); 3] = [(2.0, 1.0), (4.0, 2.0), (6.0, 3.0)];
 /// From this long, morphs are 1.5x as likely.
 pub const MORPH_HOURS: f32 = 4.0;
 /// A wait this long guarantees one Rare-or-better card and doubles morphs.
@@ -29,7 +37,7 @@ pub fn ma(hours: f32) -> u32 {
 /// What a wait adds to the genome it produces.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Bonus {
-    /// One card per hour; the fraction is the chance of one more.
+    /// Base cards (`CARDS_AT`); the fraction is the chance of one more.
     pub cards: f32,
     /// Rarity luck, growing with the square of the time past the minimum.
     pub luck: f32,
@@ -37,10 +45,32 @@ pub struct Bonus {
     pub sure_rare: bool,
 }
 
+/// `table` read at `hours`, linear between its points.
+fn lerp(table: &[(f32, f32)], hours: f32) -> f32 {
+    let h = hours.clamp(MIN_HOURS, MAX_HOURS);
+    table
+        .windows(2)
+        .find(|w| h <= w[1].0)
+        .map(|w| {
+            let ((h0, c0), (h1, c1)) = (w[0], w[1]);
+            c0 + (c1 - c0) * (h - h0) / (h1 - h0)
+        })
+        .unwrap_or(table[table.len() - 1].1)
+}
+
+fn cards(hours: f32) -> f32 {
+    lerp(&CARDS_AT, hours)
+}
+
+/// Adjustment points a finished wait of `hours` gives the next shaping.
+pub fn points(hours: f32) -> u8 {
+    lerp(&POINTS_AT, hours).floor() as u8
+}
+
 pub fn bonus(hours: f32) -> Bonus {
     let past = (hours - MIN_HOURS).max(0.0);
     Bonus {
-        cards: hours,
+        cards: cards(hours),
         luck: 0.75 * past * past,
         morph_mult: if hours >= SURE_RARE_HOURS {
             2.0
@@ -89,6 +119,21 @@ mod tests {
             prev = per_hour;
             h += STEP_HOURS;
         }
+    }
+
+    #[test]
+    fn cards_follow_the_wait() {
+        assert_eq!(bonus(2.0).cards, 1.0);
+        assert_eq!(bonus(3.0).cards, 1.5);
+        assert_eq!(bonus(4.0).cards, 2.0);
+        assert_eq!(bonus(5.0).cards, 3.5);
+        assert_eq!(bonus(6.0).cards, 5.0);
+    }
+
+    #[test]
+    fn points_follow_the_wait() {
+        let at: Vec<u8> = [2.0, 3.0, 4.0, 5.0, 5.5, 6.0].map(points).to_vec();
+        assert_eq!(at, [1, 1, 2, 2, 2, 3]);
     }
 
     #[test]

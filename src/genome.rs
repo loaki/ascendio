@@ -55,15 +55,35 @@ impl Morph {
         }
     }
 
-    /// Keystone-bonus multiplier.
+    /// Keystone-bonus multiplier, like a card edition: the rarer, the
+    /// stronger. Melanistic pays in reach instead (it lives colder).
     pub fn strength(self) -> f32 {
         match self {
-            Morph::None => 1.0,
+            Morph::None | Morph::Melanistic => 1.0,
+            Morph::Giant => 1.25,
+            Morph::Albino => 1.5,
             Morph::Amber => 2.0,
-            _ => 1.5,
+        }
+    }
+
+    /// What it does to a keystone, in a line.
+    pub fn effect(self) -> &'static str {
+        match self {
+            Morph::None => "No morph",
+            Morph::Giant => "x1.25 its bonus",
+            Morph::Albino => "x1.5, asleep above Cool",
+            Morph::Melanistic => "Lives 2 steps colder",
+            Morph::Amber => "x2 its bonus, keeps charges",
         }
     }
 }
+
+/// Temperature steps a melanistic keystone lives below its kind.
+pub const MELANISTIC_COLDER: u8 = 2;
+/// Above this temperature an albino keystone sunburns and sleeps.
+pub const ALBINO_MAX_TEMP: u8 = 2;
+/// The morph multiplier's cap: past it nearly every card would morph.
+const MORPH_MULT_MAX: f32 = 6.0;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Card {
@@ -110,6 +130,14 @@ pub struct Odds {
     /// Morph guaranteed at least every this many genomes, once the
     /// first-morph guarantee is spent.
     pub morph_window: Option<u32>,
+    /// Extra multiplier on giant morphs (Meganeura).
+    pub giant_mult: f32,
+    /// Luck added to every card after a Rare-or-better one (Owl).
+    pub after_rare_luck: f32,
+    /// Morph multiplier added to every card after a new species (Bat).
+    pub after_new_morph: f32,
+    /// Legendary pity steps added when a genome holds nothing new.
+    pub no_new_pity: u32,
 }
 
 impl Default for Odds {
@@ -123,6 +151,10 @@ impl Default for Odds {
             catalyst: false,
             legendary_pity: LEGENDARY_PITY,
             morph_window: None,
+            giant_mult: 1.0,
+            after_rare_luck: 0.0,
+            after_new_morph: 0.0,
+            no_new_pity: 0,
         }
     }
 }
@@ -183,15 +215,18 @@ fn roll_tier(rng: &mut Rng, luck: f32) -> Tier {
     Tier::Common
 }
 
+/// How likely `taxon` is against the others of its tier: its best habitat's
+/// share of the planet, times the keystones' affinity for that habitat.
 fn weight(phy: &Phylogeny, taxon: usize, planet: &Planet, odds: &Odds) -> f32 {
     let eco = ecology::of(phy.taxa[taxon].name);
+    let shares = planet.habitat_shares();
     let aff = eco
         .needs
         .habitats
         .iter()
         .filter(|h| planet.has(**h))
-        .map(|h| odds.affinity[h.index()])
-        .fold(1.0_f32, f32::max);
+        .map(|h| (shares[h.index()] * odds.affinity[h.index()]).max(0.01))
+        .fold(0.01_f32, f32::max);
     let lure = match odds.lure {
         Some(root) if is_under(phy, taxon, root) => 3.0,
         _ => 1.0,
@@ -247,11 +282,20 @@ const GIANT_ODDS: f32 = 1.0 / 20.0;
 
 /// The chance a card is any morph, ignoring the arthropod giant boost.
 pub fn morph_chance(morph_mult: f32) -> f32 {
-    morph_mult.clamp(0.0, 12.0) * (AMBER_ODDS + ALBINO_ODDS + MELANISTIC_ODDS + GIANT_ODDS)
+    morph_mult.clamp(0.0, MORPH_MULT_MAX)
+        * (AMBER_ODDS + ALBINO_ODDS + MELANISTIC_ODDS + GIANT_ODDS)
 }
 
-fn roll_morph(phy: &Phylogeny, taxon: usize, planet: &Planet, odds: &Odds, rng: &mut Rng) -> Morph {
-    let m = odds.morph_mult.clamp(0.0, 12.0);
+/// `extra` adds to the morph multiplier for this card alone.
+fn roll_morph(
+    phy: &Phylogeny,
+    taxon: usize,
+    planet: &Planet,
+    odds: &Odds,
+    extra: f32,
+    rng: &mut Rng,
+) -> Morph {
+    let m = (odds.morph_mult + extra).clamp(0.0, MORPH_MULT_MAX);
     let arthropod = phy.taxa.iter().position(|t| t.name == "Arthropod");
     let giant_boost = if planet.oxygen >= 5 && arthropod.is_some_and(|a| is_under(phy, taxon, a)) {
         3.0
@@ -262,7 +306,7 @@ fn roll_morph(phy: &Phylogeny, taxon: usize, planet: &Planet, odds: &Odds, rng: 
     let amber = m * AMBER_ODDS;
     let albino = amber + m * ALBINO_ODDS;
     let melanistic = albino + m * MELANISTIC_ODDS;
-    let giant = melanistic + m * giant_boost * GIANT_ODDS;
+    let giant = melanistic + m * giant_boost * odds.giant_mult * GIANT_ODDS;
     if r < amber {
         Morph::Amber
     } else if r < albino {
@@ -301,7 +345,12 @@ pub fn roll(
 
     for k in 0..count {
         let last = k == count - 1;
-        let mut tier = roll_tier(rng, odds.luck);
+        let owl = if cards.iter().any(|c: &Card| c.tier >= Tier::Rare) {
+            odds.after_rare_luck
+        } else {
+            0.0
+        };
+        let mut tier = roll_tier(rng, odds.luck + owl);
         let best = cards
             .iter()
             .map(|c: &Card| c.tier)
@@ -356,8 +405,12 @@ pub fn roll(
         cards.push(card);
     }
 
+    // In roll order: a new species boosts the morphs of the cards after it.
+    let mut seen_new = false;
     for c in cards.iter_mut() {
-        c.morph = roll_morph(phy, c.taxon, planet, odds, rng);
+        let extra = if seen_new { odds.after_new_morph } else { 0.0 };
+        c.morph = roll_morph(phy, c.taxon, planet, odds, extra, rng);
+        seen_new |= c.new;
     }
     let morph_window = if pity.ever_morphed {
         odds.morph_window
@@ -380,6 +433,9 @@ pub fn roll(
     pity.since_rare = bump(pity.since_rare, Tier::Rare);
     pity.since_epic = bump(pity.since_epic, Tier::Epic);
     pity.since_legendary = bump(pity.since_legendary, Tier::Legendary);
+    if cards.iter().all(|c| !c.new) {
+        pity.since_legendary += odds.no_new_pity;
+    }
     if cards.iter().any(|c| c.morph != Morph::None) {
         pity.since_morph = 0;
         pity.ever_morphed = true;

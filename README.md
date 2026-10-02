@@ -26,7 +26,8 @@ how to run it.
    (`src/dial.rs`): swipe or scroll right/left, or use the arrow keys, to pick 2h
    to 6h in half-hour steps, while the panel shows what the wait and your
    keystones will bring. Longer waits pay more per hour (`src/wait.rs`):
-   one card per hour, luck that grows with the square of the time, morphs
+   1 card at 2h, 2 at 4h, 5 at 6h (and 1, 2, 3 adjustment points for the
+   next shaping), luck that grows with the square of the time, morphs
    x1.5 from 4h, and at 6h morphs x2 plus a guaranteed Rare. So one 6h wait
    beats two 3h ones. Each hour is 10 Ma. The countdown runs on the wall
    clock, so it keeps going with the app closed. Nothing can be changed
@@ -39,12 +40,18 @@ how to run it.
    and a duplicate becomes a specimen that levels its animal up.
 4. **Steer.** Pick 1 of 3 boons for the next cycle (Lure a clade, +1 card, a
    guaranteed Rare, x4 morphs, less wait, +2 points), and equip up to 3
-   discovered animals as **keystones**. Only keystones give their bonus, and
-   only while the planet suits them: an unsuited one is dormant.
+   discovered animals as **keystones**. Each has a bonus and a rule (grows
+   while the reef is warm, x2 in the cold, copies its neighbour, a legendary
+   perk with a catch...), and works only while the planet suits it: an
+   unsuited one is asleep. A morph changes what it does (Amber x2, Albino
+   x1.5 but sunburns, Melanistic lives colder, Giant x1.25).
 
 What a genome can hold is filtered twice (`src/genome.rs`): the tree
 (parent found, itself not) and the planet (each taxon's habitat and needs
-in `src/ecology.rs`, e.g. frogs need fresh water, dragonflies need 28% O2).
+in `src/ecology.rs`, e.g. frogs need fresh water, a mammoth needs an Ice
+age). Seven biomes (Ice age, Coal swamp, Reef sea, Savanna, Jungle,
+Hothouse, Primordial sea) rule each other out, and the odds follow how much
+of the planet each habitat covers.
 Then each card rolls a rarity tier (60/25/11/3.5/0.5%, with pity at 3, 10
 and 40 genomes) and a morph (giant 1/20, albino and melanistic 1/64, amber
 1/512). Nothing is ever sold.
@@ -116,7 +123,7 @@ ASCENDIO_TIME_SCALE=3600 cargo run --release
 ASCENDIO_DEV=1 cargo run --release
 
 # Write a PNG of the framebuffer after N seconds and exit, without touching
-# the real save. ASCENDIO_SHOT_MODE=map|spiral|dial|keystones|settings picks the screen.
+# the real save. ASCENDIO_SHOT_MODE=map|spiral|dial|keystones|settings|biomes picks the screen.
 ASCENDIO_SCRATCH=1 ASCENDIO_SHOT=shot.png ASCENDIO_SHOT_AFTER=2 cargo run --release
 
 # Start on a ready genome and tap the opening N times (0.5 s apart), for

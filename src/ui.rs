@@ -5,11 +5,11 @@
 use macroquad::prelude::*;
 
 use crate::dial;
-use crate::ecology::{self, Bonus};
-use crate::game::{self, Boon, Game, Phase};
+use crate::ecology::{self, Rule};
+use crate::game::{self, Boon, Game, Phase, Report, Status};
 use crate::genome;
 use crate::genome::Morph;
-use crate::planet::{self, Lever};
+use crate::planet::{self, Biome, Lever};
 use crate::render::{
     self, draw_meter, faded, fit_px, rgb, text, text_centered, text_width, wrap_lines, ACCENT_DNA,
     ACCENT_OK, ACCENT_WARN, EDGE, HUD_BG, LOCKED_TEXT, PANEL, PANEL_LOCKED, SILHOUETTE, TEXT,
@@ -21,6 +21,8 @@ pub const PINK: Color = rgb(0xFF7AB8);
 /// Multiply tint for a keystone the planet can't support right now.
 const DORMANT: Color = Color::new(0.42, 0.44, 0.5, 1.0);
 pub const LIME: Color = rgb(0xC5F76A);
+/// A keystone's drawback, or a lever it holds.
+const LOCK_RED: Color = rgb(0xFF6A4A);
 
 /// Textures the UI draws with, built once (they need a GL context).
 pub struct Assets {
@@ -235,14 +237,14 @@ pub fn draw_hud(game: &Game, now: f64, assets: &Assets) {
 /// The lever panel, just above the bottom bar.
 pub fn panel_rect() -> Rect {
     let (sw, sh) = (screen_width(), screen_height());
-    let (w, h) = (sw * 0.84, sh * 0.275);
+    let (w, h) = (sw * 0.84, sh * 0.31);
     Rect::new((sw - w) * 0.5, sh - render::bar_height() - h - 10.0, w, h)
 }
 
 fn lever_row(i: usize) -> Rect {
     let r = panel_rect();
-    let head = r.h * 0.15;
-    let foot = r.h * 0.14;
+    let head = r.h * 0.13;
+    let foot = r.h * 0.22;
     let row_h = (r.h - head - foot) / 5.0;
     Rect::new(r.x, r.y + head + i as f32 * row_h, r.w, row_h)
 }
@@ -308,6 +310,13 @@ fn shape_hint(game: &Game) -> (String, Color) {
             ACCENT_WARN,
         );
     }
+    if let Some(why) = Lever::ALL.iter().find_map(|&l| {
+        game.lever_lock(l, -1)
+            .or_else(|| game.lever_lock(l, 1))
+            .map(|w| format!("{}: {w}", l.name()))
+    }) {
+        return (why, LOCK_RED);
+    }
     let (now, after) = (game.planet, game.planet_after());
     let mut changes = Vec::new();
     for l in Lever::ALL {
@@ -334,10 +343,18 @@ fn shape_hint(game: &Game) -> (String, Color) {
         }
         return ("Nothing new can evolve yet".into(), TEXT_DIM);
     }
-    (
-        format!("{n} undiscovered species could evolve here"),
-        rgb(0x6FF5E1),
-    )
+    // Otherwise: what keeps the other biomes away.
+    let here = Biome::of(&game.planet);
+    let others: Vec<String> = Biome::ALL
+        .into_iter()
+        .filter(|b| !here.contains(b))
+        .filter_map(|b| {
+            let why = b.ranges().missing(&game.planet, 0)?;
+            Some(format!("{}: {why}", b.name()))
+        })
+        .take(2)
+        .collect();
+    (others.join("  ·  "), LOCKED_TEXT)
 }
 
 /// The button that gives up a running wait, in the lever panel's corner.
@@ -378,8 +395,7 @@ fn draw_launched_keystones(game: &Game, sprites: &Sprites, r: Rect, px: f32) {
             icon,
             if dormant { DORMANT } else { WHITE },
         );
-        let e = keystone_effect(game, t);
-        let c = if dormant { ACCENT_WARN } else { LIME };
+        let (e, c) = keystone_effect(game, t);
         text(
             &e,
             sx + icon + u(),
@@ -539,32 +555,59 @@ pub fn draw_lever_panel(
                 }
                 for (plus, label) in [(false, "-"), (true, "+")] {
                     let b = lever_button(i, plus);
-                    let ok = game.can_step(lever, if plus { 1 } else { -1 });
-                    frame(
-                        b,
-                        if ok { rgb(0x0A1422) } else { rgb(0x070B12) },
-                        if ok { rgb(0x2F6B72) } else { rgb(0x141C26) },
-                        1.5,
-                    );
-                    text_centered(
-                        label,
-                        b.x + b.w * 0.5,
-                        b.y + b.h * 0.72,
-                        b.h * 0.7,
-                        if ok { TEXT } else { LOCKED_TEXT },
-                    );
+                    let delta = if plus { 1 } else { -1 };
+                    let ok = game.can_step(lever, delta);
+                    let locked = game.lever_lock(lever, delta).is_some();
+                    let (fill, edge, ink) = if locked {
+                        (rgb(0x2A1512), LOCK_RED, LOCK_RED)
+                    } else if ok {
+                        (rgb(0x0A1422), rgb(0x2F6B72), TEXT)
+                    } else {
+                        (rgb(0x070B12), rgb(0x141C26), LOCKED_TEXT)
+                    };
+                    frame(b, fill, edge, 1.5);
+                    text_centered(label, b.x + b.w * 0.5, b.y + b.h * 0.72, b.h * 0.7, ink);
                 }
             }
+            draw_biome_line(game, r, px);
             let (hint, col) = shape_hint(game);
             text(
                 &hint,
                 r.x + r.w * 0.04,
-                r.y + r.h * 0.95,
-                fit_px(&hint, r.w * 0.92, px * 0.95),
+                r.y + r.h * 0.965,
+                fit_px(&hint, r.w * 0.92, px * 0.9),
                 col,
             );
         }
     }
+}
+
+/// The biome the planet is, and what can evolve.
+fn draw_biome_line(game: &Game, r: Rect, px: f32) {
+    let x = r.x + r.w * 0.04;
+    let y = r.y + r.h * 0.87;
+    let biomes = Biome::of(&game.planet);
+    let mut cx = x;
+    if biomes.is_empty() {
+        text("NO BIOME", cx, y, px * 0.85, LOCKED_TEXT);
+        cx += text_width("NO BIOME", px * 0.85) + px * 0.8;
+    }
+    for b in biomes {
+        let label = b.name().to_uppercase();
+        let tw = text_width(&label, px * 0.85);
+        draw_rectangle(cx, y - px * 0.85, tw + px * 0.5, px * 1.05, rgb(b.color()));
+        text(&label, cx + px * 0.25, y, px * 0.85, render::BG);
+        cx += tw + px * 1.0;
+    }
+    let n = game.eligible_count();
+    let msg = format!("{n} species can evolve here");
+    text(
+        &msg,
+        cx,
+        y,
+        fit_px(&msg, r.x + r.w * 0.96 - cx, px * 0.85),
+        rgb(0x6FF5E1),
+    );
 }
 
 // --- the wait panel (with the dial) ------------------------------------------------
@@ -594,26 +637,31 @@ pub fn wait_back_rect() -> Rect {
 }
 
 /// What an equipped keystone adds, short enough for the wait panel.
-fn keystone_effect(game: &Game, taxon: usize) -> String {
-    if game.dormant_reason(taxon).is_some() {
-        return "dormant".into();
+fn keystone_effect(game: &Game, taxon: usize) -> (String, Color) {
+    match game
+        .keystone_reports()
+        .into_iter()
+        .find(|r| r.taxon == taxon)
+    {
+        Some(r) => report_line(&r, true),
+        None => ("-".into(), TEXT_DIM),
     }
-    let s = game.keystone_strength(taxon);
-    let pct = |per: f32| format!("{:.0}%", per * s * 100.0);
-    match ecology::of(game.taxon(taxon).name).bonus {
-        Bonus::Affinity(h) => format!(
-            "x{:.1} {}",
-            1.0 + game::AFFINITY_PER_UNIT * s,
-            h.name().to_lowercase()
-        ),
-        Bonus::Luck | Bonus::LivingFossil => format!("+{s:.1} luck"),
-        Bonus::ExtraCard => format!("+{} card", pct(game::EXTRA_CARD_PER_UNIT)),
-        Bonus::Morph | Bonus::Oddity => format!("+{} morph", pct(game::MORPH_PER_UNIT)),
-        Bonus::Quick => format!("-{} wait", pct(game::QUICK_PER_UNIT)),
-        Bonus::Point => "+1 point".into(),
-        Bonus::Soil => "+1 vegetation".into(),
-        Bonus::DoubleSpecimens => "x2 duplicates".into(),
-        Bonus::Mind => format!("+1 pt, +{s:.1} luck"),
+}
+
+/// A keystone's status or gains in a line; `short` drops the reasons.
+fn report_line(r: &Report, short: bool) -> (String, Color) {
+    match &r.status {
+        Status::Asleep(_) if short => ("asleep".into(), ACCENT_WARN),
+        Status::Asleep(why) => (format!("Asleep: {why}"), ACCENT_WARN),
+        Status::Waiting(_) if short => ("waiting".into(), TEXT_DIM),
+        Status::Waiting(why) => (format!("Waiting: {why}"), TEXT_DIM),
+        Status::Active => {
+            let mut line = r.summary();
+            if let (Some(note), false) = (&r.note, short) {
+                line = format!("{line}  ·  {note}");
+            }
+            (line, LIME)
+        }
     }
 }
 
@@ -732,8 +780,7 @@ pub fn draw_wait_panel(game: &Game, sprites: &Sprites) {
             icon,
             if dormant { DORMANT } else { WHITE },
         );
-        let e = keystone_effect(game, t);
-        let c = if dormant { ACCENT_WARN } else { LIME };
+        let (e, c) = keystone_effect(game, t);
         text(
             &e,
             sx + icon + u,
@@ -813,7 +860,14 @@ pub fn draw_bottom_bar(
             let f = game.forecast();
             (
                 format!("LET {} RUN", hours_label(game.wait_hours)),
-                format!("{} Ma  ·  {} cards", f.ma, f.odds.cards),
+                format!(
+                    "{} Ma  ·  {} card{}  ·  {} pt{}",
+                    f.ma,
+                    f.odds.cards,
+                    if f.odds.cards == 1 { "" } else { "s" },
+                    f.points,
+                    if f.points == 1 { "" } else { "s" }
+                ),
                 ACCENT_OK,
                 true,
             )
@@ -930,7 +984,28 @@ pub fn keystone_equip_rect() -> Rect {
 
 pub fn keystone_info_rect() -> Rect {
     let r = info_rect();
-    Rect::new(r.x + r.w * 0.64, r.y + r.h * 0.46, r.w * 0.32, r.h * 0.26)
+    Rect::new(r.x + r.w * 0.64, r.y + r.h * 0.46, r.w * 0.32, r.h * 0.22)
+}
+
+/// Picks the morph the selected keystone works with.
+pub fn keystone_morph_rect() -> Rect {
+    let r = info_rect();
+    Rect::new(r.x + r.w * 0.64, r.y + r.h * 0.74, r.w * 0.32, r.h * 0.2)
+}
+
+/// A morph's name on a coloured tab, bottom-left at (`x`, `bottom`).
+fn morph_badge(m: Morph, x: f32, bottom: f32, h: f32) {
+    let (fill, ink) = match m {
+        Morph::Amber => (rgb(0xFFB048), rgb(0x0E1116)),
+        Morph::Albino => (rgb(0xF2F5F8), rgb(0x0E1116)),
+        Morph::Melanistic => (rgb(0x2A2F3A), TEXT),
+        _ => (rgb(0x5BC8F5), rgb(0x0E1116)),
+    };
+    let label = m.name().to_uppercase();
+    let px = h * 0.8;
+    let w = text_width(&label, px) + h * 0.4;
+    draw_rectangle(x, bottom - h, w, h, fill);
+    text(&label, x + h * 0.2, bottom - h * 0.22, px, ink);
 }
 
 fn collection(game: &Game) -> Vec<usize> {
@@ -996,13 +1071,15 @@ pub fn draw_keystones(
         TEXT_DIM,
     );
 
+    let reports = game.keystone_reports();
     for i in 0..game.keystone_slots() {
         let r = slot_rect(i);
         match game.keystones.get(i) {
             Some(&t) => {
                 let tier = ecology::of(game.taxon(t).name).tier;
-                let dormant = game.dormant_reason(t);
-                let col = if dormant.is_some() {
+                let rep = reports.iter().find(|x| x.taxon == t);
+                let asleep = rep.is_none_or(|x| matches!(x.status, Status::Asleep(_)));
+                let col = if asleep {
                     ACCENT_WARN
                 } else {
                     render::tier_color(tier)
@@ -1010,48 +1087,45 @@ pub fn draw_keystones(
                 frame(
                     r,
                     rgb(0x0A1020),
-                    faded(col, if dormant.is_some() { 0.6 } else { 1.0 }),
+                    faded(col, if asleep { 0.6 } else { 1.0 }),
                     1.5,
                 );
                 draw_rectangle(r.x + 2.0, r.y + 2.0, r.h - 4.0, r.h - 4.0, rgb(0x050A14));
+                let morph = game.edition(t);
                 draw_taxon(
                     sprites,
                     game,
                     t,
-                    best_morph(game, t),
+                    morph,
                     vec2(r.x + r.h * 0.5, r.y + r.h * 0.5),
                     r.h * 0.8,
-                    if dormant.is_some() { DORMANT } else { WHITE },
+                    if asleep { DORMANT } else { WHITE },
                 );
+                if morph != Morph::None {
+                    morph_badge(morph, r.x + 2.0, r.y + r.h - 2.0, r.h * 0.22);
+                }
                 text(
                     game.taxon(t).name,
                     r.x + r.h * 1.15,
                     r.y + r.h * 0.42,
-                    r.h * 0.3,
-                    if dormant.is_some() { TEXT_DIM } else { TEXT },
+                    fit_px(game.taxon(t).name, r.w * 0.5, r.h * 0.3),
+                    if asleep { TEXT_DIM } else { TEXT },
                 );
-                let (line, line_col) = match &dormant {
-                    Some(why) => (format!("Dormant: {why}"), ACCENT_WARN),
-                    None => (
-                        format!(
-                            "{}  ·  x{:.1}",
-                            ecology::of(game.taxon(t).name).bonus.describe(),
-                            game.keystone_strength(t)
-                        ),
-                        LIME,
-                    ),
+                let (line, line_col) = match rep {
+                    Some(x) => report_line(x, false),
+                    None => (String::new(), TEXT_DIM),
                 };
                 text(
                     &line,
                     r.x + r.h * 1.15,
                     r.y + r.h * 0.8,
-                    fit_px(&line, r.w * 0.8, r.h * 0.28),
+                    fit_px(&line, r.w - r.h * 1.3, r.h * 0.28),
                     line_col,
                 );
-                let (tag, tag_col) = if dormant.is_some() {
-                    ("DORMANT", ACCENT_WARN)
-                } else {
-                    ("ACTIVE", LIME)
+                let (tag, tag_col) = match rep.map(|x| &x.status) {
+                    Some(Status::Active) => ("ACTIVE", LIME),
+                    Some(Status::Waiting(_)) => ("WAITING", TEXT_DIM),
+                    _ => ("ASLEEP", ACCENT_WARN),
                 };
                 text(
                     tag,
@@ -1172,17 +1246,20 @@ pub fn draw_keystones(
                 TEXT,
             );
             text(eco.tier.name(), tx, r.y + r.h * 0.36, r.h * 0.13, col);
-            let px = r.h * 0.13;
-            for (i, line) in wrap_lines(&eco.bonus.describe(), col_w, px)
-                .iter()
-                .take(2)
-                .enumerate()
-            {
-                let y = r.y + r.h * (0.54 + 0.15 * i as f32);
-                text(line, tx, y, fit_px(line, col_w, px), LIME);
+            let px = r.h * 0.12;
+            let mut lines: Vec<(String, Color)> = wrap_lines(&eco.describe(), col_w, px)
+                .into_iter()
+                .map(|l| (l, LIME))
+                .collect();
+            if let Rule::Catch(c) = eco.rule {
+                lines.push((format!("But: {}", c.drawback()), rgb(0xFF6A4A)));
+            }
+            for (i, (line, c)) in lines.iter().take(3).enumerate() {
+                let y = r.y + r.h * (0.52 + 0.13 * i as f32);
+                text(line, tx, y, fit_px(line, col_w, px), *c);
             }
             let (status, status_col) = match game.dormant_reason(t) {
-                Some(why) => (format!("Dormant here: {why}"), ACCENT_WARN),
+                Some(why) => (format!("Asleep here: {why}"), ACCENT_WARN),
                 None => (
                     format!(
                         "Thrives here  ·  Lv {}  ·  x{:.1}",
@@ -1196,10 +1273,38 @@ pub fn draw_keystones(
             text(
                 &status,
                 sx,
-                r.y + r.h * 0.91,
-                fit_px(&status, r.w * 0.92, r.h * 0.13),
+                r.y + r.h * 0.93,
+                fit_px(
+                    &status,
+                    keystone_morph_rect().x - sx - r.w * 0.02,
+                    r.h * 0.12,
+                ),
                 status_col,
             );
+            // The morph it works with, when it owns one to pick.
+            if game.morphs[t] != 0 {
+                let b = keystone_morph_rect();
+                let can = game.phase() == Phase::Shape;
+                let m = game.edition(t);
+                frame(
+                    b,
+                    PANEL,
+                    if can { rgb(0x6FF5E1) } else { rgb(0x1B2C48) },
+                    1.0,
+                );
+                let label = if m == Morph::None {
+                    "MORPH: NONE".to_string()
+                } else {
+                    format!("MORPH: {}", m.name().to_uppercase())
+                };
+                text_centered(
+                    &label,
+                    b.x + b.w * 0.5,
+                    b.y + b.h * 0.7,
+                    fit_px(&label, b.w * 0.9, b.h * 0.5),
+                    if can { TEXT } else { LOCKED_TEXT },
+                );
+            }
             let equipped = game.keystones.contains(&t);
             let can = game.keystones_editable()
                 && (equipped || game.keystones.len() < game.keystone_slots());
@@ -1313,35 +1418,23 @@ pub fn draw_detail(game: &Game, taxon: usize, sprites: &Sprites, assets: &Assets
     y += px * 1.6;
     let p = &game.planet;
     let n = eco.needs;
+    let mut rows: Vec<(String, bool)> = Vec::new();
+    if let Some(b) = n.biome {
+        rows.push((format!("Biome: {}", b.name()), b.ranges().contains(p)));
+    }
     let hab: Vec<&str> = n.habitats.iter().map(|h| h.name()).collect();
-    let rows: Vec<(String, bool)> = [
-        Some((hab.join(" or "), n.habitats.iter().any(|&h| p.has(h)))),
-        (n.oxygen_min > 0).then(|| {
-            (
-                format!("Oxygen {}%+", planet::oxygen_percent(n.oxygen_min)),
-                p.oxygen >= n.oxygen_min,
-            )
-        }),
-        (n.temp_min > 0 || n.temp_max < 5).then(|| {
-            (
-                format!(
-                    "{} to {}",
-                    planet::temperature_label(n.temp_min),
-                    planet::temperature_label(n.temp_max)
-                ),
-                (n.temp_min..=n.temp_max).contains(&p.temperature),
-            )
-        }),
-        (n.veg_min > 0 || n.veg_max < 5).then(|| {
-            (
-                format!("Vegetation {} to {}", n.veg_min, n.veg_max),
-                (n.veg_min..=n.veg_max).contains(&p.vegetation),
-            )
-        }),
-    ]
-    .into_iter()
-    .flatten()
-    .collect();
+    rows.push((hab.join(" or "), n.habitats.iter().any(|&h| p.has(h))));
+    for lever in Lever::ALL {
+        let (lo, hi) = n.ranges.get(lever);
+        let in_biome = n.biome.is_some_and(|b| b.ranges().get(lever) == (lo, hi));
+        if in_biome || (lo, hi) == planet::Ranges::ANY.get(lever) {
+            continue;
+        }
+        rows.push((
+            range_label(lever, lo, hi),
+            (lo..=hi).contains(&p.get(lever)),
+        ));
+    }
     for (label, ok) in rows {
         text(&label, x, y, px, TEXT);
         let v = if ok { "YES" } else { "NO" };
@@ -1356,8 +1449,15 @@ pub fn draw_detail(game: &Game, taxon: usize, sprites: &Sprites, assets: &Assets
     }
     y += px * 0.6;
     text("AS A KEYSTONE", x, y, px, ACCENT_WARN);
-    y += px * 1.5;
-    text(&eco.bonus.describe(), x, y, px, LIME);
+    for line in wrap_lines(&eco.describe(), r.w * 0.86, px) {
+        y += px * 1.4;
+        text(&line, x, y, px, LIME);
+    }
+    if let Rule::Catch(c) = eco.rule {
+        y += px * 1.4;
+        let catch = format!("But: {}", c.drawback());
+        text(&catch, x, y, fit_px(&catch, r.w * 0.86, px), rgb(0xFF6A4A));
+    }
     if found {
         y += px * 1.6;
         let (have, step) = game.level_progress(taxon);
@@ -1380,11 +1480,18 @@ pub fn draw_detail(game: &Game, taxon: usize, sprites: &Sprites, assets: &Assets
         for (k, &m) in game::MORPHS.iter().enumerate() {
             let mr = Rect::new(x + k as f32 * (mw + r.w * 0.02), y, mw, mw);
             let owned = game.morphs[taxon] & game::morph_bit(m) != 0;
+            let worn = owned && game.edition(taxon) == m;
             frame(
                 mr,
                 rgb(0x050A14),
-                if owned { rgb(0x6FF5E1) } else { rgb(0x141C26) },
-                1.0,
+                if worn {
+                    LIME
+                } else if owned {
+                    rgb(0x6FF5E1)
+                } else {
+                    rgb(0x141C26)
+                },
+                if worn { 2.0 } else { 1.0 },
             );
             draw_taxon(
                 sprites,
@@ -1402,8 +1509,21 @@ pub fn draw_detail(game: &Game, taxon: usize, sprites: &Sprites, assets: &Assets
                 fit_px(m.name(), mw * 0.9, px * 0.7),
                 if owned { TEXT } else { LOCKED_TEXT },
             );
+            for (i, line) in wrap_lines(m.effect(), mw, px * 0.6)
+                .iter()
+                .take(2)
+                .enumerate()
+            {
+                text_centered(
+                    line,
+                    mr.x + mw * 0.5,
+                    mr.y + mw + px * (0.9 + 0.75 * i as f32),
+                    px * 0.6,
+                    if owned { TEXT_DIM } else { LOCKED_TEXT },
+                );
+            }
         }
-        y += mw + px * 1.4;
+        y += mw + px * 2.9;
         if let Some(ma) = game.found_ma[taxon] {
             text(&format!("Evolved after {ma} Ma"), x, y, px * 0.9, TEXT_DIM);
         }
@@ -1413,6 +1533,171 @@ pub fn draw_detail(game: &Game, taxon: usize, sprites: &Sprites, assets: &Assets
         cx,
         r.y + r.h - px * 0.8,
         px * 0.8,
+        faded(TEXT_DIM, 0.7),
+    );
+}
+
+/// "Oxygen 21%+", "Cold to Temperate", "Land 4+".
+fn range_label(lever: Lever, lo: u8, hi: u8) -> String {
+    let top = planet::Ranges::ANY.get(lever).1;
+    let fmt = |v: u8| match lever {
+        Lever::Oxygen => format!("{}%", planet::oxygen_percent(v)),
+        Lever::Temperature => planet::temperature_label(v).to_string(),
+        _ => v.to_string(),
+    };
+    let name = match lever {
+        Lever::Temperature => "",
+        l => l.name(),
+    };
+    let span = if hi >= top {
+        format!("{}+", fmt(lo))
+    } else if lo == 0 && lever != Lever::Temperature {
+        format!("up to {}", fmt(hi))
+    } else if lo == hi {
+        fmt(lo)
+    } else {
+        format!("{} to {}", fmt(lo), fmt(hi))
+    };
+    format!("{name} {span}").trim().to_string()
+}
+
+// --- the biome guide (from the map) ---------------------------------------------------
+
+/// Under the top bar, at the right: opens the biome guide.
+pub fn biomes_button_rect() -> Rect {
+    let u = u();
+    let (w, h) = (u * 40.0, u * 16.0);
+    Rect::new(
+        screen_width() - w - u * 4.0,
+        render::bar_height() + u * 4.0,
+        w,
+        h,
+    )
+}
+
+pub fn draw_biomes_button() {
+    let b = biomes_button_rect();
+    frame(b, faded(PANEL, 0.92), rgb(0x6FF5E1), 1.5);
+    text_centered(
+        "BIOMES",
+        b.x + b.w * 0.5,
+        b.y + b.h * 0.68,
+        b.h * 0.6,
+        rgb(0x6FF5E1),
+    );
+}
+
+/// A biome's lever ranges in a line ("Land 4+  ·  Vegetation 1 to 2").
+fn biome_recipe(b: Biome) -> String {
+    let r = b.ranges();
+    Lever::ALL
+        .iter()
+        .filter(|&&l| r.get(l) != planet::Ranges::ANY.get(l))
+        .map(|&l| {
+            let (lo, hi) = r.get(l);
+            let label = range_label(l, lo, hi);
+            // Temperature labels carry no lever name.
+            if l == Lever::Temperature {
+                format!("Temp {label}")
+            } else {
+                label
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("  ·  ")
+}
+
+/// Every biome: its levers, whether the planet is it (or why not), and its
+/// animals, found ones in colour.
+pub fn draw_biomes(game: &Game, sprites: &Sprites) {
+    let (sw, sh, u) = (screen_width(), screen_height(), u());
+    draw_rectangle(0.0, 0.0, sw, sh, faded(render::BG, 0.9));
+    let r = Rect::new(sw * 0.04, sh * 0.07, sw * 0.92, sh * 0.86);
+    frame(r, rgb(0x070D1C), rgb(0x6FF5E1), 2.0);
+    let px = u * 7.0;
+    let x = r.x + u * 5.0;
+    let w = r.w - u * 10.0;
+    text("BIOMES", x, r.y + u * 11.0, px * 1.3, ACCENT_WARN);
+    let note = "Each rules the others out. Animals of a biome live only there.";
+    text(
+        note,
+        x,
+        r.y + u * 18.0,
+        fit_px(note, w, px * 0.75),
+        TEXT_DIM,
+    );
+
+    let top = r.y + u * 24.0;
+    let row_h = (r.y + r.h - u * 10.0 - top) / Biome::ALL.len() as f32;
+    let p = &game.planet;
+    for (i, b) in Biome::ALL.into_iter().enumerate() {
+        let y = top + i as f32 * row_h;
+        let col = rgb(b.color());
+        if i > 0 {
+            draw_line(x, y, x + w, y, 1.0, EDGE);
+        }
+        let name_y = y + row_h * 0.27;
+        text(&b.name().to_uppercase(), x, name_y, px, col);
+        let members: Vec<usize> = (0..game.phy.len())
+            .filter(|&t| ecology::of(game.taxon(t).name).needs.biome == Some(b))
+            .collect();
+        let found = members.iter().filter(|&&t| game.unlocked[t]).count();
+        let count = format!("{found}/{}", members.len());
+        text(
+            &count,
+            x + w - text_width(&count, px * 0.85),
+            name_y,
+            px * 0.85,
+            TEXT_DIM,
+        );
+        let recipe = biome_recipe(b);
+        text(
+            &recipe,
+            x,
+            y + row_h * 0.48,
+            fit_px(&recipe, w, px * 0.75),
+            TEXT,
+        );
+        let (status, status_col) = match b.ranges().missing(p, 0) {
+            None => ("Your planet is this biome".to_string(), ACCENT_OK),
+            Some(why) => (format!("Your planet: {why}"), LOCKED_TEXT),
+        };
+        text(
+            &status,
+            x,
+            y + row_h * 0.68,
+            fit_px(&status, w, px * 0.7),
+            status_col,
+        );
+        // The animals, found ones in colour, the rest as silhouettes.
+        let icon = (row_h * 0.26).min(u * 10.0);
+        let iy = y + row_h * 0.84;
+        for (k, &t) in members.iter().enumerate() {
+            let cx = x + icon * 0.5 + k as f32 * icon * 1.1;
+            if cx > x + w {
+                break;
+            }
+            let seen = game.unlocked[t];
+            draw_taxon(
+                sprites,
+                game,
+                t,
+                if seen {
+                    best_morph(game, t)
+                } else {
+                    Morph::None
+                },
+                vec2(cx, iy),
+                icon,
+                if seen { WHITE } else { SILHOUETTE },
+            );
+        }
+    }
+    text_centered(
+        "tap to close",
+        r.x + r.w * 0.5,
+        r.y + r.h - u * 3.5,
+        px * 0.75,
         faded(TEXT_DIM, 0.7),
     );
 }

@@ -64,6 +64,8 @@ struct Shot {
     mode: Option<Mode>,
     /// `ASCENDIO_SHOT_MODE=dial`: the spiral with the wait dial up.
     dial: bool,
+    /// `ASCENDIO_SHOT_MODE=biomes`: the map with the biome guide open.
+    biomes: bool,
 }
 
 /// Dev aids, all read from `ASCENDIO_*` environment variables (see the
@@ -80,7 +82,7 @@ struct Dev {
     /// `ASCENDIO_DEMO_TAPS=n`: start on a ready genome and tap it `n` times.
     demo_taps: Option<u32>,
     /// `ASCENDIO_SHOT=out.png`, `ASCENDIO_SHOT_AFTER` (default 5) and
-    /// `ASCENDIO_SHOT_MODE=map|spiral|dial|keystones|settings`.
+    /// `ASCENDIO_SHOT_MODE=map|spiral|dial|keystones|settings|biomes`.
     shot: Option<Shot>,
 }
 
@@ -92,13 +94,14 @@ impl Dev {
             path,
             after: env_parse("ASCENDIO_SHOT_AFTER").unwrap_or(5.0),
             mode: match shot_mode.as_deref() {
-                Some("map") => Some(Mode::Map),
+                Some("map" | "biomes") => Some(Mode::Map),
                 Some("spiral" | "dial") => Some(Mode::Spiral),
                 Some("keystones") => Some(Mode::Keystones),
                 Some("settings") => Some(Mode::Settings),
                 _ => None,
             },
             dial: shot_mode.as_deref() == Some("dial"),
+            biomes: shot_mode.as_deref() == Some("biomes"),
         });
         Self {
             time_scale: env_parse("ASCENDIO_TIME_SCALE")
@@ -208,6 +211,8 @@ async fn main() {
     let mut mode = Mode::Spiral;
     let mut keystones = KeystoneView::default();
     let mut detail: Option<usize> = None;
+    // The biome guide, opened from the map.
+    let mut biomes_open = false;
     let mut opening: Option<Opening> = None;
     let mut boon_hover: Option<usize> = None;
     let mut pinch_accum = 1.0f32;
@@ -306,6 +311,10 @@ async fn main() {
             }
             if op.is_done() {
                 opening = None;
+            }
+        } else if biomes_open {
+            if tap.take().is_some() {
+                biomes_open = false;
             }
         } else if detail.is_some() {
             if tap.take().is_some() {
@@ -499,7 +508,9 @@ async fn main() {
                     cam.pan_screen(gesture.drag);
                 }
                 if let Some(p) = tap {
-                    if let Some(i) = layout.hit(cam.screen_to_world(p)) {
+                    if ui::biomes_button_rect().contains(p) {
+                        biomes_open = true;
+                    } else if let Some(i) = layout.hit(cam.screen_to_world(p)) {
                         detail = Some(i);
                     }
                 }
@@ -519,6 +530,13 @@ async fn main() {
                 }
                 if let Some(p) = tap {
                     if let Some(sel) = keystones
+                        .selected
+                        .filter(|&t| game.morphs[t] != 0 && ui::keystone_morph_rect().contains(p))
+                    {
+                        if game.cycle_edition(sel) {
+                            save(&game);
+                        }
+                    } else if let Some(sel) = keystones
                         .selected
                         .filter(|_| ui::keystone_equip_rect().contains(p))
                     {
@@ -565,6 +583,7 @@ async fn main() {
             if mode == Mode::Map {
                 cam.fit(layout.min, layout.max);
             }
+            biomes_open |= shot.biomes;
         }
 
         let t = get_time() as f32;
@@ -595,6 +614,7 @@ async fn main() {
             Mode::Map => {
                 render::draw_map(&game, &layout, &cam, &sprites);
                 ui::draw_hud(&game, t_now, &assets);
+                ui::draw_biomes_button();
                 ui::draw_bottom_bar(&game, t_now, Some(true), choosing, &assets);
             }
             Mode::Keystones => {
@@ -612,6 +632,11 @@ async fn main() {
         }
         if game.phase() == Phase::Boon && opening.is_none() {
             ui::draw_boons(&game, &sprites, &assets, boon_hover);
+        }
+        // The guide belongs to the map: leaving it closes the guide.
+        biomes_open &= mode == Mode::Map;
+        if biomes_open {
+            ui::draw_biomes(&game, &sprites);
         }
         if let Some(i) = detail {
             ui::draw_detail(&game, i, &sprites, &assets);

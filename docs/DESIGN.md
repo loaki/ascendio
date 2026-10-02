@@ -22,15 +22,15 @@ because the planet needs time, not because the game makes you wait.
 ```
  ┌──────────────┐    ┌─────────────────┐    ┌───────────────────┐    ┌──────────────┐
  │ SHAPE        │ →  │ ACCELERATE TIME │ →  │ EXPRESS GENOME    │ →  │ STEER        │
- │ spend 3 pts  │    │ 2 h to 6 h real │    │ 2 to 6 cards,     │    │ pick 1 boon, │
+ │ spend 1-3 pts│    │ 2 h to 6 h real │    │ 1 to 6 cards,     │    │ pick 1 boon, │
  │ on 5 levers  │    │ = 20 to 60 Ma   │    │ staged reveal     │    │ set keystones│
  └──────────────┘    └─────────────────┘    └───────────────────┘    └──────┬───────┘
         ↑                                                                   │
         └───────────────────────────────────────────────────────────────────┘
 ```
 
-1. **Shape.** Spend **adjustment points** (3 per cycle to start) to move the
-   planet's levers one step each. The background changes as you go.
+1. **Shape.** Spend **adjustment points** (1 to 3, from the length of the
+   last wait) to move the planet's levers one step each. The background changes as you go.
 2. **Accelerate time.** One button. A real-time countdown starts, and the
    spiral and background animate the ages passing. You can close the app.
 3. **Express the genome.** When the timer ends, a new genome waits. Tap
@@ -56,16 +56,20 @@ will bring: the rarity odds, the cards, the morph chance and each
 keystone's share. Longer waits pay more per hour, so a 6h wait always beats
 two 3h ones:
 
-| Wait | Cards | Luck | Morphs | Extra |
-|---|---|---|---|---|
-| 2 h | 2 | +0 | x1 | |
-| 3 h | 3 | +0.75 | x1 | |
-| 4 h | 4 | +3 | x1.5 | |
-| 5 h | 5 | +6.75 | x1.5 | |
-| 6 h | 6 | +12 | x2 | one Rare or better guaranteed |
+| Wait | Cards | Points next | Luck | Morphs | Extra |
+|---|---|---|---|---|---|
+| 2 h | 1 | 1 | +0 | x1 | |
+| 3 h | 1.5 | 1 | +0.75 | x1 | |
+| 4 h | 2 | 2 | +3 | x1.5 | |
+| 5 h | 3.5 | 2 | +6.75 | x1.5 | |
+| 6 h | 5 | 3 | +12 | x2 | one Rare or better guaranteed |
 
-A half hour adds a 50% chance of one more card. Keystone bonuses stack on
-top (6 cards at most); the tutorial cycles pay like a 3h wait.
+Half hours in between are interpolated; a fraction is the chance of one
+more card. **Points next** are the adjustment points the next shaping gets
+(before keystones and boons): a long wait buys a big reshape, a short one a
+small tweak. The first shaping and the ones after the tutorial cycles get 3. Keystone bonuses stack on top (6 cards at most). The tutorial
+cycles pay like a 3h wait, but with 3 cards so the first genomes fill
+the tree.
 
 Each hour is **10 Ma** of in-game time. The HUD shows the total let run so
 far (e.g. "120 Ma", counting up while a cycle runs) and the era, which is the
@@ -121,6 +125,35 @@ never your collection.
 | **Fresh water** | Land ≥ 2, Temperature ≥ 1, Vegetation ≥ 1 |
 | **Land** | Land ≥ 1 and Vegetation ≥ 1 |
 | **Forest** | Vegetation ≥ 3 |
+
+**Habitat share.** Each habitat covers a share of the planet: the sea
+shrinks as land rises, a reef takes half of a warm shallow sea, forest
+takes the vegetated part of the land. Among the animals that can drop, the
+odds follow their habitat's share, so a planet that is mostly forest
+mostly turns up forest animals.
+
+### Biomes
+
+Most rare animals belong to a **biome**, a named set of lever ranges. The
+biomes rule each other out, so no planet holds them all: the best single
+planet suits about half of the tree (81 of 151), against 146 before
+biomes. The broad animals left (the trunk of the tree and the commons)
+still split by temperature and oxygen: cold-water against warm-water,
+mammals out of a hothouse or a 35% oxygen world, open-ocean swimmers off a
+continent.
+
+| Biome | Levers | Animals |
+|---|---|---|
+| **Primordial sea** | O ≤ 2, Land ≤ 2 | Sponge, Comb Jelly, Trilobite, Anomalocaris, Dickinsonia... |
+| **Reef sea** | Land ≤ 1, T 3–4, O ≥ 3 | Coral, Octopus, Clownfish, Seahorse, Nautilus... |
+| **Ice age** | T ≤ 1 | Mammoth, Sabre-tooth, Seal, Neanderthal |
+| **Coal swamp** | O 5, V ≥ 4, T 3–4 | Meganeura, Dragonfly, Spider, Scorpion, Acanthostega... |
+| **Jungle** | V 5, T 4, O ≤ 4 | Lemur, Gorilla, Chimpanzee, Parrot, Dodo, Frog... |
+| **Savanna** | Land ≥ 4, V 1–2, T ≥ 3 | Lion, Giraffe, Elephant, Rhino, Lucy, Human... |
+| **Hothouse** | T 5, Volcanism ≥ 1 | T. rex, Triceratops, Sauropod, Pterosaur, Plesiosaur... |
+
+The linked levers push between them: a jungle's forests raise oxygen
+towards a coal swamp, volcanoes warm a planet towards a hothouse.
 
 ## The new genome
 
@@ -185,19 +218,26 @@ Each card then:
 A pity roll only fires when an eligible taxon of that tier exists. The
 counter keeps waiting otherwise.
 
-Cards per genome are **3** base, + keystone and boon bonuses, up to 6.
+Cards per genome come from the wait (see Pacing), + keystone and boon
+bonuses, up to 6.
 
 ### Morphs: the second rarity axis
 
-Any card can be a morph, rolled independently. Morphs only change looks
-and bonus strength, never what the animal is.
+Any card can be a morph, rolled independently. Morphs never change what
+the animal is; like card editions, they change what it does as a
+keystone. The rarer, the stronger:
 
-| Morph | Chance | Look | Keystone bonus |
+| Morph | Chance | Look | As a keystone |
 |---|---|---|---|
-| Giant | 1/20 | Drawn one size up | ×1.5 |
-| Albino | 1/64 | Pale palette, red eyes | ×1.5 |
-| Melanistic | 1/64 | Near-black palette | ×1.5 |
-| Amber | 1/512 | Gold-preserved, prismatic frame | ×2 |
+| Giant | 1/20 | Drawn one size up | ×1.25 its bonus |
+| Albino | 1/64 | Pale palette, red eyes | ×1.5, but asleep above Cool (sunburn) |
+| Melanistic | 1/64 | Near-black palette | Lives 2 temperature steps colder |
+| Amber | 1/512 | Gold-preserved, prismatic frame | ×2, and keeps its charges while asleep |
+
+The player picks which owned morph each keystone works with (the MORPH
+button on the Keystones screen, while shaping). A first Giant or Amber is
+picked automatically. All the morph multipliers together are capped at ×6,
+or nearly every card would morph.
 
 At Oxygen 5, the Giant chance for arthropods is ×3 (Meganeura: 71 cm
 wingspan at about 35% O₂). Your first morph is guaranteed within your
@@ -223,28 +263,57 @@ own planet.
   20 discoveries, a 5th at 40.
 - Only keystones give their bonus, so your collection becomes a loadout.
   Equip sea creatures to pull more sea creatures.
-- **A keystone only works while the planet suits it.** If its habitat or
-  needs aren't met (a frog on a dry world, a penguin in a hothouse), it goes
-  **dormant** and gives nothing. While time runs, the planet as launched is
-  the one that counts. Dormant keystones are greyed out with the reason, the
-  Keystones tab gets a warning dot, and the lever panel says which one
-  your last lever change put to sleep.
+- **A keystone only works while the planet suits it.** If its habitat,
+  biome or needs aren't met (a frog on a dry world, a penguin in a
+  hothouse), it falls **asleep** and gives nothing. While time runs, the
+  planet as launched is the one that counts. Asleep keystones are greyed
+  out with the reason, and the Keystones tab gets a warning dot.
 - You can swap them while shaping and while time runs (the genome is rolled
   from them when the cycle ends). They lock while a genome waits to be
   opened.
 
-**Bonus kinds.** Magnitude scales by tier: Common 1, Uncommon 2, Rare 3,
-Epic 4, Legendary 6 units.
+**A bonus and a rule.** Each keystone has a **bonus**, what it adds, and a
+**rule**, when and how much. Most rules lean on the planet, so the
+keystones you equip decide the world you shape (`src/ecology.rs`, the
+taxa table below).
 
-| Kind | Per unit | Cap |
+The bonus's strength is tier units (Common 1, Uncommon 2, Rare 3, Epic 4,
+Legendary 6) × level × morph:
+
+| Bonus | Per unit | Cap |
 |---|---|---|
-| **Affinity (habitat)** | +10% weight for taxa of that habitat | none |
 | **Luck** | +1% to the rare-tier rolls | +15% |
-| **Extra card** | +12% chance of +1 card | 3 extra cards |
-| **Morph** | +8% morph chance | ×3 |
+| **Cards** | +12% chance of +1 card | 3 extra cards |
+| **Morphs** | +8% morph chance | ×3 |
 | **Quick** | −3% real wait | −30% |
-| **Point** | +1 adjustment point (Epic+ only) | 6 points |
-| **Planet** | A passive lever effect, e.g. worms +1 vegetation per cycle | – |
+| **Point** | +1 adjustment point | 8 points |
+| **Soil** | +1 vegetation each cycle | – |
+| **Habitat** | +10% odds for that habitat's animals | – |
+
+| Rule | What it does | Examples |
+|---|---|---|
+| **Flat** | Always on | most commons |
+| **When** | ×2, or only, under a planet condition | Penguin, Wolf (×2 when cold); Ant (only at 35% O₂); Crocodile, Hippo (only with 20%+ fresh water); Lizard, Ostrich (only on bare ground); Dimetrodon (only with volcanoes) |
+| **Grows** | A charge per cycle run with a condition, half the bonus each; one cycle without it empties them | Coral (warm), Bee (forest), Sauropod (hothouse), Coelacanth (the planet left unchanged) |
+| **Team** | Stronger with other keystones | Cow, Pig, Chicken, Horse (+half per other farm animal); Dog (×2 with a farm animal); Clownfish (×2 with a cnidarian); Butterfly (×2 with Bee); Shark (+half per fish) |
+| **Copies** | Repeats another keystone's gains | Octopus (the one above); Chimpanzee (the one below, if a mammal); Parrot (the strongest, at half) |
+| **Triggers** | Acts during the reveal | Owl (after a Rare, the next card is luckier); Bat (after a new species, more morphs); Spider (a duplicate feeds a keystone a specimen); Starfish (duplicates charge +⅓ card each, up to 1); Horseshoe Crab (nothing new brings the Legendary pity 2 closer) |
+| **Fragile** | ×3, then leaves after 3 cycles until found again | Dodo |
+| **Extremes** | Never asleep; +2 Luck per lever at its min or max | Tardigrade |
+
+**Legendaries come with a catch:**
+
+| Legendary | Perk | Catch |
+|---|---|---|
+| T. rex | +2 cards | Plant-eater keystones fall asleep |
+| Megalodon | Doubles all Luck | Temperature can't go below Temperate |
+| Human | +2 adjustment points | Vegetation can't go above Forest |
+| Archaeopteryx | Morphs ×3 | One fewer boon to choose from |
+| Tuatara | A Legendary within 25 genomes | The wait is an hour longer |
+| Platypus | Counts as every team; more morphs | Can't be copied |
+
+Coelacanth (grows with stasis) and Dodo (fragile) are the other two.
+A lever a keystone holds shows a red button, and the panel says who holds it.
 
 ### Boons (short-term)
 
@@ -260,166 +329,163 @@ only:
 
 ## The 151 taxa
 
-Legend:
+Generated from the code (`cargo test print_doc_table -- --ignored
+--nocapture`). **Needs** are a biome, or lever ranges on top of the
+habitat: L = Land, V = Vegetation, O = Oxygen, T = Temperature.
 
-- **Needs** are extra conditions on top of the habitat. O = Oxygen level,
-  T = Temperature level, V = Vegetation level.
-- **Branch** marks a category (`Group::Backbone`). Discovering it opens the
-  pool of its children. Its keystone bonus is the clade's signature.
-
-| # | Taxon | Habitat | Needs | Tier | Keystone bonus |
+| # | Taxon | Habitat | Needs | Tier | Keystone |
 |---|---|---|---|---|---|
-| 0 | Urmetazoan | Sea | – | start | Luck (+1) |
-| 1 | Sea Sponge | Sea | O≥1 | C | Luck |
-| 2 | Comb Jelly | Sea | O≥1 | C | Affinity: Sea |
-| 3 | Placozoan | Sea | O≥1 | U | Morph |
-| 4 | Cnidarian | Sea | O≥1 | C | Branch · Affinity: Sea |
-| 5 | Jellyfish | Sea | O≥1 | C | Morph |
-| 6 | Coral | Reef | O≥2 | U | Affinity: Reef |
-| 7 | Bilaterian | Sea | O≥2 | C | Branch · Extra card |
-| 8 | Acoel Worm | Sea | O≥1 | C | Quick |
-| 9 | Protostome | Sea | O≥2 | C | Branch · Luck |
-| 10 | Deuterostome | Sea | O≥2 | U | Branch · Luck |
-| 11 | Spiralian | Sea | O≥2 | C | Branch · Affinity: Shore |
-| 12 | Ecdysozoan | Sea | O≥2 | C | Branch · Morph |
-| 13 | Flatworm | Fresh | O≥2 | C | Extra card |
-| 14 | Mollusc | Sea | O≥2 | U | Branch · Affinity: Reef |
-| 15 | Snail | Shore | O≥2 | C | Quick |
-| 16 | Octopus | Reef | O≥3 | E | Extra card |
-| 17 | Segmented Worm | Land | O≥2 | U | Planet: +1 Vegetation/cycle (soil) |
-| 18 | Nematode | Sea or Land | O≥1 | C | Quick |
-| 19 | Arthropod | Sea | O≥2 | U | Branch · Morph |
-| 20 | Chelicerate | Shore | O≥2 | U | Branch · Affinity: Land |
-| 21 | Horseshoe Crab | Shore | O≥2 | R | Luck (living fossil) |
-| 22 | Scorpion | Land | O≥3, T≥3 | R | Affinity: Land |
-| 23 | Spider | Forest | O≥3 | R | Extra card |
-| 24 | Pancrustacean | Sea | O≥2 | C | Branch · Affinity: Shore |
-| 25 | Crab | Shore | O≥2 | U | Affinity: Shore |
-| 26 | Insect | Land | O≥3, V≥2 | U | Branch · Affinity: Forest |
-| 27 | Dragonfly | Fresh | O≥4 | R | Morph (Giant ×3 at O5) |
-| 28 | Beetle | Forest | O≥3 | U | Extra card |
-| 29 | Butterfly | Forest | O≥3, T≥3 | R | Planet: +1 Vegetation/cycle (pollination) |
-| 30 | Ant | Forest | T≥3 | E | Point |
-| 31 | Echinoderm | Sea | O≥2 | C | Branch · Affinity: Reef |
-| 32 | Starfish | Shore | O≥2 | C | Specimens ×2 (regeneration) |
-| 33 | Sea Urchin | Reef | O≥2 | U | Affinity: Reef |
-| 34 | Chordate | Sea | O≥2 | U | Branch · Luck |
-| 35 | Sea Squirt | Sea | O≥2 | C | Quick |
-| 36 | Vertebrate | Sea | O≥3 | R | Branch · Luck |
-| 37 | Lamprey | Sea or Fresh | O≥2 | U | Affinity: Fresh |
-| 38 | Jawed Fish | Sea | O≥3 | U | Branch · Extra card |
-| 39 | Shark | Sea | O≥3 | R | Luck |
-| 40 | Ray-finned Fish | Sea or Fresh | O≥2 | C | Extra card |
-| 41 | Lobe-finned Fish | Fresh | O≥2 | R | Branch · Affinity: Fresh |
-| 42 | Coelacanth | Sea | O≥2, T≤3 | L | Luck + Legendary pity 40 → 30 |
-| 43 | Tetrapod | Shore + Fresh | O≥2, V≥2 | E | Branch · Affinity: Land |
-| 44 | Amphibian | Fresh | T≥2, V≥2 | U | Branch · Affinity: Fresh |
-| 45 | Frog | Fresh | T≥3 | C | Morph |
-| 46 | Amniote | Land | V≥2 | R | Branch · Affinity: Land |
-| 47 | Mammal | Land | T≥1, V≥2 | R | Branch · Luck |
-| 48 | Platypus | Fresh | T≤3 | L | Morph + first morph guaranteed each week |
-| 49 | Marsupial | Land | – | U | Branch · Morph |
-| 50 | Placental | Land | V≥2 | E | Branch · Extra card |
-| 51 | Afrothere | Land | – | U | Branch · Extra card |
-| 52 | Mouse | Land | V≥1 | C | Quick |
-| 53 | Bat | Forest | O≥3 | R | Extra card |
-| 54 | Carnivoran | Land | – | U | Branch · Luck |
-| 55 | Cetartiodactyl | Land | – | U | Branch · Affinity: Land |
-| 56 | Primate | Forest | T≥3 | R | Branch · Affinity: Forest |
-| 57 | Lemur | Forest | T≥3 | U | Morph |
-| 58 | Monkey | Forest | T≥3 | R | Branch · Extra card |
-| 59 | Ape | Forest | T≥3 | E | Branch · Luck |
-| 60 | Chimpanzee | Forest | T≥3 | E | Extra card |
-| 61 | Human | Land | O≥3, 2≤T≤4, V≥2 | L | Point + Luck |
-| 62 | Reptile | Land | T≥2 | U | Branch · Affinity: Land |
-| 63 | Turtle | Shore | T≥2 | U | Specimens ×2 |
-| 64 | Lizard | Land | T≥3, V≤3 | C | Quick |
-| 65 | Crocodile | Fresh | T≥4 | R | Affinity: Fresh |
-| 66 | Dinosaur | Land | T≥3, V≥3 | E | Extra card |
-| 67 | Bird | Forest | O≥3 | E | Luck |
-| 68 | Clam | Reef | O≥2 | C | Specimens ×2 |
-| 69 | Squid | Sea | O≥3 | U | Extra card |
-| 70 | Ammonite | Sea | O≥2, T≥2 | R | Luck |
-| 71 | Earthworm | Land | O≥2, V≥2 | C | Soil |
-| 72 | Tardigrade | Sea or Land | – | E | Oddity |
-| 73 | Trilobite | Sea | O≥2 | U | Affinity: Sea |
-| 74 | Anomalocaris | Sea | O≥2 | E | Luck |
-| 75 | Centipede | Forest | O≥3 | C | Quick |
-| 76 | Shrimp | Sea | O≥2 | C | Extra card |
-| 77 | Bee | Forest | O≥3, T≥2, V≥3 | U | Soil |
-| 78 | Meganeura | Fresh | O≥5 | E | Morph |
-| 79 | Dunkleosteus | Sea | O≥3 | E | Luck |
-| 80 | Stingray | Sea | O≥3 | U | Affinity: Sea |
-| 81 | Megalodon | Sea | O≥3, T≥3 | L | Extra card |
-| 82 | Seahorse | Reef | O≥3, T≥3 | R | Morph |
-| 83 | Anglerfish | Sea | O≥2 | R | Luck |
-| 84 | Tiktaalik | Shore or Fresh | O≥3 | R | Affinity: Shore |
-| 85 | Salamander | Fresh | 1≤T≤4 | C | Quick |
-| 86 | Snake | Land | T≥3 | U | Luck |
-| 87 | Pterosaur | Shore | O≥3, T≥3 | E | Affinity: Shore |
-| 88 | T. rex | Land | O≥3, T≥3, V≥2 | L | Luck |
-| 89 | Sauropod | Forest | O≥3, T≥3, V≥3 | E | Specimens ×2 |
-| 90 | Penguin | Shore | T≤2 | R | Affinity: Shore |
-| 91 | Mammoth | Land | T≤1 | E | Living fossil |
-| 92 | Rabbit | Land | 1≤V≤4 | C | Specimens ×2 |
-| 93 | Horse | Land | 1≤T≤4, 1≤V≤3 | U | Quick |
-| 94 | Dolphin | Sea | T≥2 | R | Extra card |
-| 95 | Lion | Land | T≥3, 1≤V≤3 | R | Luck |
-| 96 | Gorilla | Forest | T≥3 | R | Point |
-| 97 | Nautilus | Reef | O≥2, T≥2 | R | Living fossil |
-| 98 | Fly | Land | O≥2 | C | Quick |
-| 99 | Clownfish | Reef | O≥2, T≥3 | C | Affinity: Reef |
-| 100 | Lungfish | Fresh | O≥2, T≥3 | R | Affinity: Fresh |
-| 101 | Pig | Land | V≥1 | U | Specimens ×2 |
-| 102 | Tuatara | Forest | 1≤T≤3 | L | Living fossil |
-| 103 | Sea Turtle | Sea | T≥2 | R | Specimens ×2 |
-| 104 | Plesiosaur | Sea | O≥3, T≥2 | E | Extra card |
-| 105 | Ichthyosaur | Sea | O≥3 | E | Luck |
-| 106 | Triceratops | Land | O≥3, T≥3, V≥2 | E | Point |
-| 107 | Velociraptor | Land | O≥3, T≥3, V≤3 | R | Quick |
-| 108 | Archaeopteryx | Forest | O≥3, T≥3 | L | Luck |
-| 109 | Ostrich | Land | T≥3, V≤2 | R | Quick |
-| 110 | Parrot | Forest | T≥3 | E | Point |
-| 111 | Owl | Forest | – | U | Luck |
-| 112 | Koala | Forest | T≥3 | U | Planet: +1 Vegetation/cycle (soil) |
-| 113 | Sloth | Forest | T≥3 | U | Specimens ×2 |
-| 114 | Giraffe | Land | T≥3, 1≤V≤3 | R | Extra card |
-| 115 | Hippo | Fresh | T≥3 | R | Affinity: Fresh |
-| 116 | Rhino | Land | T≥2, 1≤V≤3 | E | Luck |
-| 117 | Bear | Forest | T≤3 | R | Point |
-| 118 | Seal | Shore | T≤2 | U | Affinity: Shore |
-| 119 | Synapsid | Land | O≥2 | U | Branch · Luck |
-| 120 | Archosaur | Land | O≥2 | U | Branch · Affinity: Land |
-| 121 | Theropod | Land | O≥3, T≥3 | R | Branch · Extra card |
-| 122 | Hominin | Land | O≥3, 2≤T≤4, V≥1 | E | Branch · Luck |
-| 123 | Perissodactyl | Land | – | U | Branch · Quick |
-| 124 | Spiny-rayed Fish | Sea | O≥2 | C | Branch · Extra card |
-| 125 | Elephant | Land | T≥3, V≥3 | E | Point |
-| 126 | Whale | Sea | – | E | Affinity: Sea |
-| 127 | Wolf | Land | T≤3 | R | Luck |
-| 128 | Dog | Land | – | U | Luck |
-| 129 | Kangaroo | Land | T≥3, V≤3 | R | Affinity: Land |
-| 130 | Tiger | Forest | T≥1 | E | Luck |
-| 131 | Cat | Land | – | C | Morph |
-| 132 | Sabre-tooth | Land | T≤3 | E | Extra card |
-| 133 | Giant Panda | Forest | 1≤T≤4, V≥3 | E | Specimens ×2 |
-| 134 | Cow | Land | 1≤V≤4 | C | Planet: +1 Vegetation/cycle (soil) |
-| 135 | Chicken | Land | – | C | Extra card |
-| 136 | Songbird | Forest | – | C | Quick |
-| 137 | Dodo | Forest | T≥3 | L | Oddity |
-| 138 | True Bug | Land | O≥2 | C | Quick |
-| 139 | Wasp | Land | O≥3, V≥1 | U | Luck |
-| 140 | Mite | Sea or Land | O≥1 | C | Specimens ×2 |
-| 141 | Termite | Forest | O≥2, T≥3, V≥2 | U | Planet: +1 Vegetation/cycle (soil) |
-| 142 | Moss Animal | Sea | O≥1 | C | Affinity: Reef |
-| 143 | Brittle Star | Sea | O≥1 | C | Quick |
-| 144 | Carp | Fresh | O≥2 | C | Specimens ×2 |
-| 145 | Dickinsonia | Sea | – | R | Oddity |
-| 146 | Dimetrodon | Land | O≥2, T≥3 | R | Luck |
-| 147 | Lucy | Land | O≥3, T≥3, 1≤V≤4 | E | Point |
-| 148 | Neanderthal | Land | O≥3, T≤3 | E | Luck |
-| 149 | Pakicetus | Shore | – | R | Affinity: Shore |
-| 150 | Acanthostega | Fresh | O≥2, T≥3 | R | Affinity: Fresh |
+| 0 | Urmetazoan | Sea | – | C | Better rarity odds |
+| 1 | Sea Sponge | Sea | Primordial sea | C | Better rarity odds |
+| 2 | Comb Jelly | Sea | Primordial sea | C | More sea finds |
+| 3 | Placozoan | Sea | Primordial sea | U | More morphs |
+| 4 | Cnidarian | Sea | O≥1 | C | More sea finds |
+| 5 | Jellyfish | Sea | O≥1, T≤2 | C | More morphs |
+| 6 | Coral | Reef | Reef sea | U | Better rarity odds, growing each cycle at Temperate or warmer |
+| 7 | Bilaterian | Sea | O≥2 | C | Chance of +1 card |
+| 8 | Acoel Worm | Sea | Primordial sea | C | Shorter wait |
+| 9 | Protostome | Sea | O≥2 | C | Better rarity odds |
+| 10 | Deuterostome | Sea | O≥2 | U | Better rarity odds |
+| 11 | Spiralian | Sea | O≥2 | C | More shore finds |
+| 12 | Ecdysozoan | Sea | O≥2 | C | More morphs |
+| 13 | Flatworm | Fresh water | O≥2, 1≤T≤2 | C | Chance of +1 card |
+| 14 | Mollusc | Sea | O≥2 | U | More reef finds |
+| 15 | Snail | Shore | O≥2, T≥3 | C | Shorter wait |
+| 16 | Octopus | Reef | Reef sea | E | Copies the keystone above it |
+| 17 | Segmented Worm | Land | 1≤V≤4, O≥2 | U | +1 vegetation each cycle |
+| 18 | Nematode | Sea or Land | O≥1 | C | Shorter wait |
+| 19 | Arthropod | Sea | O≥2 | U | More morphs |
+| 20 | Chelicerate | Shore | O≥2 | U | More land finds |
+| 21 | Horseshoe Crab | Shore | O≥2, 2≤T≤4 | R | Nothing new? A Legendary comes sooner |
+| 22 | Scorpion | Land | Coal swamp | R | More land finds |
+| 23 | Spider | Forest | Coal swamp | R | Each duplicate feeds a keystone a specimen |
+| 24 | Pancrustacean | Sea | O≥2 | C | More shore finds |
+| 25 | Crab | Shore | O≥2, T≥3 | U | More shore finds |
+| 26 | Insect | Land | V≥2, O≥3 | U | More forest finds |
+| 27 | Dragonfly | Fresh water | Coal swamp | R | Giant morphs x3 at 35% oxygen |
+| 28 | Beetle | Forest | Coal swamp | U | Chance of +1 card |
+| 29 | Butterfly | Forest | Jungle | R | Chance of +1 card; x2 with a pollinator keystone |
+| 30 | Ant | Forest | T≥3 | E | Chance of +1 card, only at 35% oxygen |
+| 31 | Echinoderm | Sea | O≥2 | C | More reef finds |
+| 32 | Starfish | Shore | O≥2 | C | Each duplicate: +1/3 card, up to 1 |
+| 33 | Sea Urchin | Reef | Reef sea | U | More reef finds |
+| 34 | Chordate | Sea | O≥2 | U | Better rarity odds |
+| 35 | Sea Squirt | Sea | O≥2, T≤2 | C | Shorter wait |
+| 36 | Vertebrate | Sea | O≥3 | R | Better rarity odds |
+| 37 | Lamprey | Sea or Fresh water | O≥2, T≤2 | U | More fresh water finds |
+| 38 | Jawed Fish | Sea | O≥3 | U | Chance of +1 card |
+| 39 | Shark | Sea | L≤2, O≥3 | R | Better rarity odds for each other fish keystone |
+| 40 | Ray-finned Fish | Sea or Fresh water | O≥2 | C | Chance of +1 card |
+| 41 | Lobe-finned Fish | Fresh water | O≥2 | R | More fresh water finds |
+| 42 | Coelacanth | Sea | O≥2, T≤2 | L | Better rarity odds, growing while the planet stays the same |
+| 43 | Tetrapod | Shore or Fresh water | V≥2, O≥2 | E | More land finds |
+| 44 | Amphibian | Fresh water | V≥2, T≥2 | U | More fresh water finds |
+| 45 | Frog | Fresh water | Jungle | C | More morphs |
+| 46 | Amniote | Land | V≥2 | R | More land finds |
+| 47 | Mammal | Land | V≥2, O≤4, 1≤T≤4 | R | Better rarity odds |
+| 48 | Platypus | Fresh water | T≤2 | L | Counts as every team; more morphs; but can't be copied |
+| 49 | Marsupial | Land | O≤4, T≤4 | U | More morphs |
+| 50 | Placental | Land | V≥2, O≤4, T≤4 | E | Chance of +1 card |
+| 51 | Afrothere | Land | O≤4, 3≤T≤4 | U | Chance of +1 card |
+| 52 | Mouse | Land | O≤4, T≤4 | C | Shorter wait |
+| 53 | Bat | Forest | 3≤O≤4, 2≤T≤4 | R | After a new species, the next cards morph more |
+| 54 | Carnivoran | Land | O≤4, T≤4 | U | Better rarity odds |
+| 55 | Cetartiodactyl | Land | O≤4, T≤4 | U | More land finds |
+| 56 | Primate | Forest | O≤4, 3≤T≤4 | R | More forest finds |
+| 57 | Lemur | Forest | Jungle | U | More morphs |
+| 58 | Monkey | Forest | O≤4, 3≤T≤4 | R | Chance of +1 card |
+| 59 | Ape | Forest | O≤4, 3≤T≤4 | E | Better rarity odds |
+| 60 | Chimpanzee | Forest | Jungle | E | Copies the keystone below it, if a mammal |
+| 61 | Human | Land | Savanna | L | +2 adjustment points; but vegetation can't go above forest |
+| 62 | Reptile | Land | T≥3 | U | More land finds |
+| 63 | Turtle | Shore | T≥3 | U | Duplicates count double |
+| 64 | Lizard | Land | V≤3, T≥3 | C | Better rarity odds, only on bare ground |
+| 65 | Crocodile | Fresh water | T≥4 | R | Chance of +1 card, only with 20%+ fresh water |
+| 66 | Dinosaur | Land | V≥2, T≥3 | E | Chance of +1 card |
+| 67 | Bird | Forest | O≥3 | E | Better rarity odds |
+| 68 | Clam | Reef | Reef sea | C | Duplicates count double |
+| 69 | Squid | Sea | L≤2, O≥3, T≤2 | U | Chance of +1 card |
+| 70 | Ammonite | Sea | L≤2, O≥2, T≥3 | R | Better rarity odds |
+| 71 | Earthworm | Land | V≥2, O≥2 | C | +1 vegetation each cycle |
+| 72 | Tardigrade | Sea or Land | – | E | Never asleep; +2 Luck per lever at its min or max |
+| 73 | Trilobite | Sea | Primordial sea | U | More sea finds |
+| 74 | Anomalocaris | Sea | Primordial sea | E | Better rarity odds |
+| 75 | Centipede | Forest | Coal swamp | C | Shorter wait |
+| 76 | Shrimp | Sea | L≤2, O≥2 | C | Chance of +1 card |
+| 77 | Bee | Forest | V≥3, O≥3, T≥2 | U | Better rarity odds, growing each cycle with forest |
+| 78 | Meganeura | Fresh water | Coal swamp | E | Giant morphs x3 at 35% oxygen |
+| 79 | Dunkleosteus | Sea | L≤2, O≥3, T≥3 | E | Better rarity odds |
+| 80 | Stingray | Sea | L≤2, O≥3, T≥3 | U | More sea finds |
+| 81 | Megalodon | Sea | L≤2, O≥3, T≥3 | L | Doubles all Luck; but temperature can't go below temperate |
+| 82 | Seahorse | Reef | Reef sea | R | More morphs |
+| 83 | Anglerfish | Sea | L≤2, O≥2, T≤2 | R | Better rarity odds |
+| 84 | Tiktaalik | Shore or Fresh water | O≥3 | R | More shore finds |
+| 85 | Salamander | Fresh water | 1≤T≤2 | C | Shorter wait |
+| 86 | Snake | Land | T≥3 | U | Better rarity odds |
+| 87 | Pterosaur | Shore | Hothouse | E | More shore finds |
+| 88 | T. rex | Land | Hothouse | L | +2 cards in every genome; but plant-eater keystones fall asleep |
+| 89 | Sauropod | Forest | Hothouse | E | Chance of +1 card, growing each cycle in the Hothouse |
+| 90 | Penguin | Shore | T≤2 | R | Better rarity odds; x2 at Snowball or Cold |
+| 91 | Mammoth | Land | Ice age | E | Chance of +1 card |
+| 92 | Rabbit | Land | 1≤V≤4, O≤4, T≤4 | C | Duplicates count double |
+| 93 | Horse | Land | 1≤V≤3, 1≤T≤4 | U | Better rarity odds for each other farm animal keystone |
+| 94 | Dolphin | Sea | L≤2, O≤4, 3≤T≤4 | R | Chance of +1 card |
+| 95 | Lion | Land | Savanna | R | Better rarity odds |
+| 96 | Gorilla | Forest | Jungle | R | +1 adjustment point |
+| 97 | Nautilus | Reef | Reef sea | R | Luck; legendary pity 30 |
+| 98 | Fly | Land | O≥2 | C | Shorter wait |
+| 99 | Clownfish | Reef | Reef sea | C | More reef finds; x2 with a cnidarian keystone |
+| 100 | Lungfish | Fresh water | O≥2, T≥3 | R | More fresh water finds |
+| 101 | Pig | Land | V≥1, O≤4, T≤4 | U | Better rarity odds for each other farm animal keystone |
+| 102 | Tuatara | Forest | 1≤T≤2 | L | A Legendary within 25 genomes; but the wait is an hour longer |
+| 103 | Sea Turtle | Sea | Reef sea | R | Duplicates count double |
+| 104 | Plesiosaur | Sea | Hothouse | E | Chance of +1 card |
+| 105 | Ichthyosaur | Sea | Hothouse | E | Better rarity odds |
+| 106 | Triceratops | Land | Hothouse | E | +1 adjustment point |
+| 107 | Velociraptor | Land | Hothouse | R | Shorter wait |
+| 108 | Archaeopteryx | Forest | O≥3, T≥3 | L | Morphs x3; but one fewer boon to choose from |
+| 109 | Ostrich | Land | Savanna | R | Better rarity odds, only on bare ground |
+| 110 | Parrot | Forest | Jungle | E | Copies the strongest keystone at half |
+| 111 | Owl | Forest | T≤2 | U | After a Rare or better card, the next is luckier |
+| 112 | Koala | Forest | O≤4, 3≤T≤4 | U | +1 vegetation each cycle |
+| 113 | Sloth | Forest | Jungle | U | Duplicates count double |
+| 114 | Giraffe | Land | Savanna | R | Chance of +1 card |
+| 115 | Hippo | Fresh water | O≤4, 3≤T≤4 | R | Chance of +1 card, only with 20%+ fresh water |
+| 116 | Rhino | Land | Savanna | E | Better rarity odds |
+| 117 | Bear | Forest | T≤2 | R | +1 adjustment point |
+| 118 | Seal | Shore | Ice age | U | More shore finds |
+| 119 | Synapsid | Land | O≥2 | U | Better rarity odds |
+| 120 | Archosaur | Land | O≥2, T≥3 | U | More land finds |
+| 121 | Theropod | Land | O≥3, T≥3 | R | Chance of +1 card |
+| 122 | Hominin | Land | V≥1, 3≤O≤4, 2≤T≤4 | E | Better rarity odds |
+| 123 | Perissodactyl | Land | O≤4, T≤4 | U | Shorter wait |
+| 124 | Spiny-rayed Fish | Sea | O≥2, T≥3 | C | Chance of +1 card |
+| 125 | Elephant | Land | Savanna | E | +1 adjustment point |
+| 126 | Whale | Sea | T≤2 | E | More sea finds |
+| 127 | Wolf | Land | T≤2 | R | Better rarity odds; x2 at Snowball or Cold |
+| 128 | Dog | Land | O≤4, T≤4 | U | Better rarity odds; x2 with a farm animal keystone |
+| 129 | Kangaroo | Land | Savanna | R | More land finds |
+| 130 | Tiger | Forest | O≤4, T≤2 | E | Better rarity odds |
+| 131 | Cat | Land | O≤4, T≤4 | C | More morphs |
+| 132 | Sabre-tooth | Land | Ice age | E | Chance of +1 card |
+| 133 | Giant Panda | Forest | V≥3, 1≤T≤2 | E | Duplicates count double |
+| 134 | Cow | Land | 1≤V≤4, O≤4, T≤4 | C | Better rarity odds for each other farm animal keystone |
+| 135 | Chicken | Land | O≤4, T≤4 | C | Better rarity odds for each other farm animal keystone |
+| 136 | Songbird | Forest | O≤4, T≤4 | C | Shorter wait |
+| 137 | Dodo | Forest | Jungle | L | Better rarity odds x3, then it leaves after 3 cycles |
+| 138 | True Bug | Land | O≥2, T≥3 | C | Shorter wait |
+| 139 | Wasp | Land | V≥1, O≥3, T≥3 | U | Better rarity odds |
+| 140 | Mite | Sea or Land | O≥1 | C | Duplicates count double |
+| 141 | Termite | Forest | Jungle | U | +1 vegetation each cycle |
+| 142 | Moss Animal | Sea | Primordial sea | C | More sea finds |
+| 143 | Brittle Star | Sea | Primordial sea | C | Shorter wait |
+| 144 | Carp | Fresh water | O≥2, 1≤T≤2 | C | Duplicates count double |
+| 145 | Dickinsonia | Sea | Primordial sea | R | More morphs; one every 7 genomes |
+| 146 | Dimetrodon | Land | O≥2, T≥3 | R | Shorter wait, only with volcanoes |
+| 147 | Lucy | Land | Savanna | E | +1 adjustment point |
+| 148 | Neanderthal | Land | Ice age | E | Better rarity odds |
+| 149 | Pakicetus | Shore | O≤4, 3≤T≤4 | R | More shore finds |
+| 150 | Acanthostega | Fresh water | Coal swamp | R | More fresh water finds |
 
 ### Some intended journeys
 
@@ -432,11 +498,11 @@ Legend:
   vegetation together. It's the first multi-lever puzzle.
 - **The Carboniferous gambit:** push Oxygen to 5 through forests. Giant
   dragonflies and spiders appear, and Giant morphs of arthropods triple.
-- **Opposite temperatures:** Wolf and Coelacanth want T≤3, while
+- **Opposite temperatures:** Wolf and Coelacanth want T≤2, while
   Crocodile wants T≥4. You can't have both at once, so every planet is a
   choice of who shows up.
-- **The long road to Human** is 15 branch discoveries. It needs forests,
-  a warm but not hot climate, and at least Oxygen 3. Humans are Legendary.
+- **The long road to Human** is 15 branch discoveries through forests,
+  then out onto the Savanna. Humans are Legendary.
 
 ## Leaderboard
 
