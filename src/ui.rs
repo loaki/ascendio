@@ -1135,14 +1135,19 @@ fn level_for_fossil(game: &Game, t: usize) -> u32 {
     game::level_for(game.specimens[t].max(1))
 }
 
-/// A morph's name on a coloured tab, bottom-left at (`x`, `bottom`).
-fn morph_badge(m: Morph, x: f32, bottom: f32, h: f32) {
-    let (fill, ink) = match m {
+/// A morph's tab colour and the ink for its name.
+pub fn morph_colors(m: Morph) -> (Color, Color) {
+    match m {
         Morph::Amber => (rgb(0xFFB048), rgb(0x0E1116)),
         Morph::Albino => (rgb(0xF2F5F8), rgb(0x0E1116)),
         Morph::Melanistic => (rgb(0x2A2F3A), TEXT),
         _ => (rgb(0x5BC8F5), rgb(0x0E1116)),
-    };
+    }
+}
+
+/// A morph's name on a coloured tab, bottom-left at (`x`, `bottom`).
+fn morph_badge(m: Morph, x: f32, bottom: f32, h: f32) {
+    let (fill, ink) = morph_colors(m);
     let label = m.name().to_uppercase();
     let px = h * 0.8;
     let w = text_width(&label, px) + h * 0.4;

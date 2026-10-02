@@ -175,13 +175,19 @@ a glowing 3D double helix, and expressing it is the "pack opening"
    shockwaves, speed lines and a storm of base pairs, all in the **best card's
    colour**: the first time the rarity shows. The cards are
    thrown out of the blast.
-4. **A face-down stack.** The cards land in one stack ("7 CARDS"). Each
-   tap reveals the top card full screen ("CARD 3 / 7") and the next tap
-   passes to the following one. The best card is always last.
-5. **Staged reveal for a new species.** Silhouette, then habitat, clade and
-   origin typed out, then the animal bursts into colour.
-6. **First-ever discovery** gets the full animation; a duplicate is a quick
-   "+1 specimen".
+4. **A row of slots.** The cards fly out of the blast into one empty slot
+   each, in a row under the reveal (smaller as cards grow, two rows past
+   8). The first reveal starts at once; each tap passes to the next card,
+   whose slot lights up, then fills with its rarity colour and animal once
+   revealed. The cards still come weakest first. After the last one, a tap
+   goes straight on: the filled row was the summary.
+5. **Silhouette roulette for every card.** Silhouettes of other
+   animals flicker in the card's place, slowing down like a slot reel
+   (gaps from 0.05 s, +22% a tick), until the real one locks ("LOCKED")
+   at 1.4 s. Only then do its habitat, clade and origin type out, so they
+   don't give it away, and at 1.8 s it bursts into colour.
+6. **First-ever discovery** gets the clues and the full burst; a duplicate
+   spins too, then shows "+1 specimen".
 
 ### What can drop: two filters, then a roll
 
@@ -265,7 +271,7 @@ can't change it. While it waits, the genome panel and the EVOLVE IT button
 show the risk ("20% the Earth ends").
 
 Tapping EVOLVE IT then plays the end of the Earth (`src/collapse.rs`,
-about 9 s, a tap skips to the end) instead of the cards, and the genome is
+about 9 s, it can't be skipped) instead of the cards, and the genome is
 lost:
 
 1. **The roll.** Red flashes, "1 IN 5".

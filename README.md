@@ -35,8 +35,9 @@ how to run it.
 3. **Evolve the genome** (`src/opening.rs`). A 3D double helix gives no
    hint of what's inside. Each of three taps mutates a third of its base
    pairs; the third collapses it into a core that detonates like a supernova
-   in the best card's colour, and the cards land in a face-down stack: each
-   tap reveals the next one, the best last. A new species gets a full reveal (silhouette, clues, then colour),
+   in the best card's colour, and the cards fly into a row of slots: each
+   tap reveals the next one (a silhouette roulette for a new species), and
+   its slot fills with its rarity colour. A new species gets a full reveal (silhouette, clues, then colour),
    and a duplicate becomes a specimen that levels its animal up.
 4. **Steer.** Pick 1 of 3 boons for the next cycle (Lure a clade, +1 card, a
    guaranteed Rare, x4 morphs, less wait, +2 points), and equip up to 3
@@ -105,7 +106,7 @@ cargo run --release
 | `-` / `+` on a lever | Spend or refund a point (shaping phase only) |
 | Bottom action button | Let time run (raises the wait dial) · confirm the wait · (countdown) · express the genome |
 | Swipe or scroll right/left, arrow keys | With the wait dial up: longer/shorter wait, 2h to 6h in half-hour steps (the spiral stays still) |
-| Tap the genome / cards | Mutate it, then flip cards; tap again to move on |
+| Tap the genome / cards | Mutate it, then reveal the cards one by one |
 | Tap the focused animal on the coil | Open its page |
 | Tap a branch or ancestor on the coil | Reroute or scroll the lineage to it |
 | Swipe the coil / wheel | Scroll the lineage |

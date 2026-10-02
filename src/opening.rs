@@ -39,9 +39,9 @@ struct Particle {
 enum Stage {
     Sealed,
     Burst,
-    Cards,
     Showcase(usize),
-    Summary,
+    /// Every card revealed: the opening is over.
+    Done,
 }
 
 pub struct Opening {
@@ -158,55 +158,132 @@ fn draw_helix(
     }
 }
 
-fn card_size() -> Vec2 {
-    let w = screen_width() * 0.42;
-    vec2(w, w * 1.4)
-}
+/// How long the real silhouette sits locked before it bursts into colour.
+const ROULETTE_HOLD: f32 = 0.4;
+/// The first gap between roulette ticks, and how much each gap grows.
+const ROULETTE_GAP: f32 = 0.05;
+const ROULETTE_SLOWDOWN: f32 = 1.22;
 
-/// Card `i` of the face-down stack: 0 on top, the best (last) at the bottom.
-fn stack_pos(i: usize) -> Vec2 {
-    let u = ui::u();
-    let depth = i.min(6) as f32;
-    vec2(screen_width() * 0.5, screen_height() * 0.5) + vec2(depth, depth) * u * 1.4
-}
-
-/// The summary grid: as many cards as the genome holds, no cap.
-fn grid_cols(n: usize) -> usize {
-    match n {
-        0..=3 => n.max(1),
-        4 => 2,
-        5..=9 => 3,
-        _ => 4,
+/// The silhouette the roulette shows at `t` for card `i` (real `taxon`
+/// once it locks at `lock`), whether a tick just happened, and whether
+/// it has locked.
+fn roulette(game: &Game, taxon: usize, i: usize, t: f32, lock: f32) -> (usize, bool, bool) {
+    if t >= lock {
+        return (taxon, t - lock < 0.06, true);
     }
+    // Tick times grow apart like a slowing reel.
+    let (mut at, mut gap, mut k) = (0.0, ROULETTE_GAP, 0);
+    while at + gap <= t {
+        at += gap;
+        gap *= ROULETTE_SLOWDOWN;
+        k += 1;
+    }
+    let n = game.phy.len();
+    let mut pick = (crate::pixel::hash(k, i as i32 * 31 + taxon as i32) * n as f32) as usize % n;
+    if pick == taxon {
+        pick = (pick + 1) % n;
+    }
+    (pick, t - at < 0.04, false)
 }
 
-fn grid_card_size(n: usize) -> Vec2 {
-    let (sw, sh) = (screen_width(), screen_height());
-    let cols = grid_cols(n) as f32;
-    let rows = n.div_ceil(grid_cols(n)).max(1) as f32;
+/// When a new species bursts into colour, in seconds into its reveal.
+const REVEAL_AT: f32 = 1.8;
+/// Where the row of card slots sits, as a fraction of the screen height.
+const SLOTS_Y: f32 = 0.775;
+/// Most slots in one row; more wrap to a second.
+const SLOTS_PER_ROW: usize = 8;
+
+/// Slots per row and the size of one, for `n` cards (no cap on `n`).
+fn slot_layout(n: usize) -> (usize, Vec2) {
+    let sw = screen_width();
+    let per_row = n.clamp(1, SLOTS_PER_ROW);
     let gap = sw * 0.03;
-    let w = ((sw * 0.92 - gap * (cols - 1.0)) / cols)
-        .min((sh * 0.6 - gap * (rows - 1.0)) / rows / 1.4)
-        .min(sw * 0.28);
-    vec2(w, w * 1.4)
+    let w = ((sw * 0.9 - gap * (per_row as f32 - 1.0)) / per_row as f32).min(sw * 0.155);
+    (per_row, vec2(w, w * 1.39))
 }
 
-fn grid_slot(i: usize, n: usize) -> Vec2 {
+/// The centre of card `i`'s slot, of `n`, under the reveal.
+fn slot_pos(i: usize, n: usize) -> Vec2 {
     let (sw, sh) = (screen_width(), screen_height());
-    let cols = grid_cols(n);
-    let rows = n.div_ceil(cols).max(1);
-    let (row, col) = (i / cols, i % cols);
+    let (per_row, size) = slot_layout(n);
+    let rows = n.div_ceil(per_row).max(1);
+    let (row, col) = (i / per_row, i % per_row);
     let in_row = if row + 1 == rows {
-        n - row * cols
+        n - row * per_row
     } else {
-        cols
+        per_row
     };
-    let cs = grid_card_size(n);
     let gap = sw * 0.03;
-    let total = in_row as f32 * cs.x + (in_row as f32 - 1.0) * gap;
-    let x = (sw - total) * 0.5 + col as f32 * (cs.x + gap) + cs.x * 0.5;
-    let y = sh * 0.5 + (row as f32 - (rows as f32 - 1.0) * 0.5) * (cs.y + gap);
+    let total = in_row as f32 * size.x + (in_row as f32 - 1.0) * gap;
+    let x = (sw - total) * 0.5 + col as f32 * (size.x + gap) + size.x * 0.5;
+    let y = sh * SLOTS_Y + (row as f32 - (rows as f32 - 1.0) * 0.5) * (size.y + gap * 0.6);
     vec2(x, y)
+}
+
+/// A card's slot before its reveal; `lit` while it is the one being revealed.
+fn draw_empty_slot(c: Vec2, size: Vec2, lit: bool) {
+    let u = ui::u();
+    let r = Rect::new(c.x - size.x * 0.5, c.y - size.y * 0.5, size.x, size.y);
+    draw_rectangle(r.x, r.y, r.w, r.h, rgb(0x071422));
+    let line = (u * 0.8).max(2.0);
+    let (edge, w) = if lit {
+        let pulse = 0.6 + 0.4 * (get_time() as f32 * 4.0).sin();
+        (faded(WHITE, pulse), line * 1.5)
+    } else {
+        (rgb(0x1E4450), line)
+    };
+    draw_rectangle_lines(r.x, r.y, r.w, r.h, w, edge);
+}
+
+/// A revealed card's slot: its rarity colour and its animal.
+fn draw_filled_slot(game: &Game, sprites: &Sprites, o: &Opened, c: Vec2, size: Vec2) {
+    let u = ui::u();
+    let r = Rect::new(c.x - size.x * 0.5, c.y - size.y * 0.5, size.x, size.y);
+    let col = tier_color(o.card.tier);
+    draw_rectangle(r.x, r.y, r.w, r.h, rgb(0x071422));
+    draw_rectangle(r.x, r.y, r.w, r.h, faded(col, 0.18));
+    draw_rectangle_lines(r.x, r.y, r.w, r.h, (u * 0.8).max(2.0), col);
+    ui::draw_taxon(
+        sprites,
+        game,
+        o.card.taxon,
+        o.card.morph,
+        c,
+        size.x * 0.72,
+        WHITE,
+    );
+    let px = size.x * 0.26;
+    // NEW along the top for a first discovery.
+    if o.card.new {
+        text_centered(
+            "NEW",
+            c.x,
+            r.y + px * 1.05,
+            fit_px("NEW", r.w * 0.85, px),
+            PINK,
+        );
+    }
+    // The morph on a band across the bottom, in its tab colour.
+    if o.card.morph != Morph::None {
+        let (fill, ink) = ui::morph_colors(o.card.morph);
+        let band = px * 1.15;
+        let inset = (u * 0.8).max(2.0);
+        draw_rectangle(
+            r.x + inset,
+            r.y + r.h - band - inset,
+            r.w - inset * 2.0,
+            band,
+            fill,
+        );
+        let name = o.card.morph.name().to_uppercase();
+        text_centered(
+            &name,
+            c.x,
+            r.y + r.h - inset - band * 0.25,
+            fit_px(&name, r.w * 0.85, px * 0.9),
+            ink,
+        );
+    }
 }
 
 impl Opening {
@@ -231,7 +308,7 @@ impl Opening {
     }
 
     pub fn is_done(&self) -> bool {
-        matches!(self.stage, Stage::Summary) && self.t > 99.0
+        self.stage == Stage::Done
     }
 
     /// The next tap bursts it: `main` opens the genome and passes the results.
@@ -299,42 +376,71 @@ impl Opening {
             }
             Stage::Burst => {
                 if self.t > BOOM + 0.6 {
-                    self.stage = Stage::Cards;
-                    self.t = 0.0;
+                    self.reveal_next();
                 }
             }
-            Stage::Cards => self.reveal_next(),
             Stage::Showcase(i) => {
-                let full = if self.opened[i].card.new { 2.3 } else { 0.8 };
+                let full = REVEAL_AT + if self.opened[i].card.new { 0.5 } else { 0.4 };
                 if self.t < full {
                     self.t = full;
                 } else {
                     self.reveal_next();
                 }
             }
-            Stage::Summary => {
-                if self.t > 0.5 {
-                    self.t = 100.0;
-                }
-            }
+            Stage::Done => {}
         }
     }
 
-    /// Flips the top card of the stack into its showcase, or ends on the
-    /// summary once the stack is empty.
+    /// Starts the next card's reveal, or ends the opening once every card
+    /// is revealed.
     fn reveal_next(&mut self) {
         let u = ui::u();
         let Some(i) = self.flipped.iter().position(|&f| f <= 0.0) else {
-            self.stage = Stage::Summary;
-            self.t = 0.0;
+            self.stage = Stage::Done;
             return;
         };
         self.flipped[i] = 0.001;
         let col = tier_color(self.opened[i].card.tier);
-        self.burst_particles(stack_pos(0), 24, 120.0 * u, &[col, WHITE], 0.0, u * 1.3);
+        let at = slot_pos(i, self.opened.len());
+        self.burst_particles(at, 24, 120.0 * u, &[col, WHITE], 0.0, u * 1.3);
         self.shake = (1.5 + self.opened[i].card.tier.index() as f32) * u;
         self.stage = Stage::Showcase(i);
         self.t = 0.0;
+    }
+
+    /// The roulette for card `i`: other silhouettes flicker past, slowing
+    /// down, until the real one (`taxon`) locks in before `REVEAL_AT`.
+    fn draw_roulette(&self, game: &Game, sprites: &Sprites, taxon: usize, i: usize, c: Vec2) {
+        let u = ui::u();
+        let size = screen_width() * 0.42;
+        let (shown, ticked, locked) = roulette(game, taxon, i, self.t, REVEAL_AT - ROULETTE_HOLD);
+        let tint = if ticked {
+            Color::new(0.24, 0.27, 0.32, 1.0)
+        } else {
+            render::SILHOUETTE
+        };
+        ui::draw_taxon(sprites, game, shown, Morph::None, c, size * 0.9, tint);
+        let (label, col) = if locked {
+            ("LOCKED", WHITE)
+        } else {
+            ("? ? ?", rgb(0x6FF5E1))
+        };
+        text_centered(label, c.x, c.y + size * 0.62, u * 9.0, col);
+    }
+
+    /// The row of slots: revealed cards filled, card `current` lit until
+    /// it is `shown`, the rest empty.
+    fn draw_slots(&self, game: &Game, sprites: &Sprites, current: usize, shown: bool) {
+        let n = self.opened.len();
+        let (_, size) = slot_layout(n);
+        for (k, o) in self.opened.iter().enumerate() {
+            let c = slot_pos(k, n);
+            if k < current || (k == current && shown) {
+                draw_filled_slot(game, sprites, o, c, size);
+            } else {
+                draw_empty_slot(c, size, k == current);
+            }
+        }
     }
 
     /// "tap: next card (3 left)", or how to finish.
@@ -421,9 +527,8 @@ impl Opening {
         match self.stage {
             Stage::Sealed => self.draw_sealed(assets, off, t),
             Stage::Burst => self.draw_burst(assets, off, t, tell),
-            Stage::Cards => self.draw_cards(assets, off, t),
             Stage::Showcase(i) => self.draw_showcase(game, sprites, assets, off, t, i),
-            Stage::Summary => self.draw_summary(game, sprites, assets, off),
+            Stage::Done => {}
         }
 
         for p in &self.particles {
@@ -658,57 +763,20 @@ impl Opening {
         };
         let scale = 1.0 + 1.5 * (1.0 - ease_out_back((b / 0.35).min(1.0)));
         text_centered(label, sw * 0.5, sh * 0.2, u * 14.0 * scale.max(1.0), tell);
+        // The cards fly out to their slots under the reveal, still empty.
         let n = self.opened.len();
-        let cs = card_size();
-        // Bottom of the stack first, so the top card lands last.
-        for i in (0..n).rev() {
-            let local = ((b - 0.3 - (n - 1 - i) as f32 * 0.07) / 0.5).clamp(0.0, 1.0);
+        let (_, size) = slot_layout(n);
+        for i in 0..n {
+            let local = ((b - 0.3 - i as f32 * 0.07) / 0.5).clamp(0.0, 1.0);
             if local <= 0.0 {
                 continue;
             }
-            let p = c.lerp(stack_pos(i), ease_out_back(local));
-            let tier = self.opened[i].card.tier;
-            draw_card_back(assets, p + off, cs * (0.3 + 0.7 * local), tier, i);
+            let p = c.lerp(slot_pos(i, n), ease_out_back(local));
+            draw_empty_slot(p + off, size * (0.3 + 0.7 * local), false);
         }
         if b > 1.3 + self.tell.index() as f32 * 0.15 {
-            self.stage = Stage::Cards;
-            self.t = 0.0;
+            self.reveal_next();
         }
-    }
-
-    /// The face-down stack: tap anywhere to reveal the top card.
-    fn draw_cards(&mut self, assets: &Assets, off: Vec2, t: f32) {
-        let u = ui::u();
-        let (sw, sh) = (screen_width(), screen_height());
-        let n = self.opened.len();
-        let cs = card_size();
-        let left: Vec<usize> = (0..n).filter(|&i| self.flipped[i] <= 0.0).collect();
-        text_centered(
-            &format!("{n} CARD{}", if n == 1 { "" } else { "S" }),
-            sw * 0.5,
-            sh * 0.13,
-            u * 10.0,
-            TEXT,
-        );
-        text_centered(
-            "the best one comes last",
-            sw * 0.5,
-            sh * 0.17,
-            u * 5.5,
-            TEXT_DIM,
-        );
-        let bob = (t * 2.0).sin() * u * 1.2;
-        for (depth, &i) in left.iter().enumerate().rev() {
-            let pos = stack_pos(depth) + off + vec2(0.0, bob);
-            draw_card_back(assets, pos, cs, self.opened[i].card.tier, i);
-        }
-        text_centered(
-            "tap to reveal",
-            sw * 0.5,
-            sh * 0.86,
-            u * 7.0,
-            faded(TEXT, 0.6 + 0.4 * (t * 3.0).sin()),
-        );
     }
 
     fn draw_showcase(
@@ -728,34 +796,34 @@ impl Opening {
         let tier = o.card.tier;
         let col = tier_color(tier);
         let c = vec2(sw * 0.5, sh * 0.36) + off;
-        let n = self.opened.len();
-        let counter = if i + 1 == n && n > 1 {
-            format!("CARD {} / {n}  ·  THE BEST", i + 1)
-        } else {
-            format!("CARD {} / {n}", i + 1)
-        };
-        text_centered(
-            &counter,
-            sw * 0.5,
-            sh * 0.055,
-            u * 6.0,
-            if i + 1 == n && n > 1 { col } else { TEXT_DIM },
-        );
         let hint = self.next_hint();
+        // Every card's slot, this one filling once its animal shows.
+        let shown = self.t >= REVEAL_AT;
+        self.draw_slots(game, sprites, i, shown);
 
         if !o.card.new {
-            let k = ease_out_back((self.t / 0.35).min(1.0));
+            // A duplicate spins too, then turns into a specimen.
+            if !shown {
+                self.draw_roulette(game, sprites, taxon, i, c);
+                return;
+            }
+            let since = self.t - REVEAL_AT;
+            if since < 0.05 {
+                self.flash = 0.6;
+                self.shake = (3.0 + tier.index() as f32 * 2.0) * u;
+            }
+            let k = ease_out_back((since / 0.35).min(1.0));
             assets.glow(c, sw * 0.35, col, 0.3);
             ui::draw_taxon(sprites, game, taxon, o.card.morph, c, sw * 0.32 * k, WHITE);
             text_centered(
                 tx.name,
                 sw * 0.5,
-                sh * 0.56,
+                sh * 0.52,
                 fit_px(tx.name, sw * 0.9, u * 10.0),
                 TEXT,
             );
-            text_centered("+1 SPECIMEN", sw * 0.5, sh * 0.62, u * 8.0, LIME);
-            let bar = Rect::new(sw * 0.2, sh * 0.66, sw * 0.6, u * 3.0);
+            text_centered("+1 SPECIMEN", sw * 0.5, sh * 0.575, u * 8.0, LIME);
+            let bar = Rect::new(sw * 0.2, sh * 0.6, sw * 0.6, u * 3.0);
             let (have, step) = game.level_progress(taxon);
             render::draw_meter(
                 bar.x,
@@ -765,7 +833,7 @@ impl Opening {
                 if step == 0 {
                     1.0
                 } else {
-                    have as f32 / step as f32 * ease_out_cubic(self.t / 0.6)
+                    have as f32 / step as f32 * ease_out_cubic(since / 0.6)
                 },
                 LIME,
             );
@@ -777,7 +845,7 @@ impl Opening {
             text_centered(
                 &lv,
                 sw * 0.5,
-                sh * 0.72,
+                sh * 0.655,
                 u * 7.0,
                 if o.level_after > o.level_before {
                     rgb(0xFFC56B)
@@ -792,7 +860,7 @@ impl Opening {
                 } else {
                     format!("{m} MORPH")
                 };
-                text_centered(&label, sw * 0.5, sh * 0.78, u * 8.0, PINK);
+                text_centered(&label, sw * 0.5, sh * 0.695, u * 8.0, PINK);
             }
             if let Some(note) = &o.card.note {
                 for (k, line) in render::wrap_lines(note, sw * 0.84, u * 5.5)
@@ -802,19 +870,19 @@ impl Opening {
                     text_centered(
                         line,
                         sw * 0.5,
-                        sh * 0.84 + k as f32 * u * 7.0,
+                        sh * 0.865 + k as f32 * u * 7.0,
                         u * 5.5,
                         rgb(0xFFC56B),
                     );
                 }
             }
-            if self.t > 0.4 {
+            if since > 0.4 {
                 text_centered(&hint, sw * 0.5, sh * 0.95, u * 5.5, faded(TEXT_DIM, 0.8));
             }
             return;
         }
 
-        let reveal_at = 1.8;
+        let reveal_at = REVEAL_AT;
         let revealed = self.t >= reveal_at;
         let sprite_size = sw * 0.42;
         if revealed {
@@ -840,22 +908,7 @@ impl Opening {
                 WHITE,
             );
         } else {
-            ui::draw_taxon(
-                sprites,
-                game,
-                taxon,
-                o.card.morph,
-                c,
-                sprite_size * 0.9,
-                render::SILHOUETTE,
-            );
-            text_centered(
-                "?",
-                c.x,
-                c.y + u * 5.0,
-                u * 24.0,
-                faded(WHITE, 0.6 + 0.4 * (t * 4.0).sin()),
-            );
+            self.draw_roulette(game, sprites, taxon, i, c);
         }
         if !revealed && self.t + 0.05 >= reveal_at {
             self.flash = 1.0;
@@ -890,13 +943,14 @@ impl Opening {
         ];
         let y0 = sh * 0.60;
         for (k, (label, value)) in clues.iter().enumerate() {
-            let appear = 0.35 + k as f32 * 0.4;
+            // Held back until the roulette locks, so they don't give it away.
+            let appear = reveal_at - ROULETTE_HOLD + k as f32 * 0.12;
             if self.t < appear {
                 continue;
             }
             let y = y0 + k as f32 * u * 9.0;
             render::text(label, sw * 0.14, y, u * 6.0, TEXT_DIM);
-            let chars = (((self.t - appear) / 0.3).min(1.0) * value.len() as f32) as usize;
+            let chars = (((self.t - appear) / 0.2).min(1.0) * value.len() as f32) as usize;
             let shown: String = value.chars().take(chars.max(1)).collect();
             let vw = render::text_width(&shown, u * 6.5);
             render::text(&shown, sw * 0.86 - vw, y, u * 6.5, TEXT);
@@ -925,188 +979,5 @@ impl Opening {
                 text_centered(&hint, sw * 0.5, sh * 0.92, u * 5.5, faded(TEXT_DIM, 0.8));
             }
         }
-    }
-
-    fn draw_summary(&mut self, game: &Game, sprites: &Sprites, assets: &Assets, off: Vec2) {
-        let u = ui::u();
-        let (sw, sh) = (screen_width(), screen_height());
-        text_centered(
-            "EVOLUTION COMPLETE",
-            sw * 0.5,
-            sh * 0.16,
-            u * 10.0,
-            rgb(0xFFC56B),
-        );
-        let n = self.opened.len();
-        let cs = grid_card_size(n);
-        for i in 0..n {
-            draw_card_face(
-                game,
-                sprites,
-                assets,
-                grid_slot(i, n) + off,
-                cs,
-                &self.opened[i],
-                1.0,
-            );
-        }
-        let new = self.opened.iter().filter(|o| o.card.new).count();
-        let msg = match new {
-            0 => "No new species this time -- your specimens grew".to_string(),
-            1 => "1 new species joins your spiral".to_string(),
-            k => format!("{k} new species join your spiral"),
-        };
-        text_centered(
-            &msg,
-            sw * 0.5,
-            sh * 0.84,
-            fit_px(&msg, sw * 0.9, u * 6.5),
-            if new > 0 { PINK } else { TEXT_DIM },
-        );
-        text_centered(
-            "tap to continue",
-            sw * 0.5,
-            sh * 0.9,
-            u * 5.5,
-            faded(TEXT_DIM, 0.8),
-        );
-    }
-}
-
-/// A closed bioluminescent shell drifting in the abyss -- the card back
-/// before it's flipped. Tier only shows through the glow, not a hard frame,
-/// so rarity stays a little ambiguous until the reveal.
-fn draw_card_back(assets: &Assets, c: Vec2, size: Vec2, tier: Tier, i: usize) {
-    let t = get_time() as f32;
-    let col = tier_color(tier);
-    let pulse = 0.5 + 0.5 * (t * 1.6 + i as f32 * 1.7).sin();
-    let r = Rect::new(c.x - size.x * 0.5, c.y - size.y * 0.5, size.x, size.y);
-
-    draw_rectangle(r.x, r.y, r.w, r.h, rgb(0x050B0E));
-    assets.glow(
-        vec2(c.x, r.y + size.y * 0.32),
-        size.y * 0.7,
-        rgb(0x0B1A20),
-        0.5,
-    );
-
-    for k in 0..7u32 {
-        let seed = (i as u32).wrapping_mul(13).wrapping_add(k.wrapping_mul(37));
-        let fx = (seed.wrapping_mul(2_654_435_761) % 1000) as f32 / 1000.0;
-        let fy = ((seed.wrapping_add(7)).wrapping_mul(2_654_435_761) % 1000) as f32 / 1000.0;
-        let s = if k % 3 == 0 { 2.5 } else { 1.5 };
-        let twinkle = 0.5 + 0.5 * (t * 0.6 + k as f32 * 1.3).sin();
-        draw_rectangle(
-            r.x + fx * r.w,
-            r.y + fy * r.h,
-            s,
-            s,
-            faded(rgb(0xC8E6E6), 0.25 + twinkle * 0.2),
-        );
-    }
-
-    // The shell: a smooth, gently lopsided oval, not a lumpy blob.
-    let sc = vec2(c.x, c.y - size.y * 0.02);
-    let (sx, sy) = (size.x * 0.34, size.y * 0.3);
-    let n = 48;
-    let ph = i as f32 * 1.9;
-    let mut prev: Option<Vec2> = None;
-    for k in 0..=n {
-        let a = k as f32 / n as f32 * std::f32::consts::TAU;
-        let wob = 1.0 + 0.045 * (a + ph).sin() + 0.02 * (a * 2.0 + ph * 1.3).sin();
-        let p = sc + vec2(a.cos() * sx * wob, a.sin() * sy * wob);
-        if let Some(pp) = prev {
-            draw_line(pp.x, pp.y, p.x, p.y, 1.2, faded(rgb(0xB4DCDC), 0.22));
-        }
-        prev = Some(p);
-    }
-
-    // Bioluminescent core, glowing from within the shell.
-    assets.glow(
-        sc,
-        sy * 0.55,
-        col,
-        0.35 + pulse * 0.25 + tier.index() as f32 * 0.04,
-    );
-
-    draw_rectangle_lines(r.x, r.y, r.w, r.h, 1.0, faded(col, 0.35));
-}
-
-fn draw_card_face(
-    game: &Game,
-    sprites: &Sprites,
-    assets: &Assets,
-    c: Vec2,
-    size: Vec2,
-    o: &Opened,
-    flip: f32,
-) {
-    let u = ui::u();
-    let t = get_time() as f32;
-    let sx = (flip * 2.0 - 1.0).abs();
-    let size = vec2(size.x * sx.max(0.02), size.y);
-    let tier = o.card.tier;
-    let col = tier_color(tier);
-    let r = Rect::new(c.x - size.x * 0.5, c.y - size.y * 0.5, size.x, size.y);
-    if flip < 0.5 {
-        draw_rectangle(r.x, r.y, r.w, r.h, rgb(0x050B0E));
-        draw_rectangle_lines(r.x, r.y, r.w, r.h, 1.0, faded(col, 0.35));
-        return;
-    }
-    assets.glow(c, size.y * 0.7, col, 0.18);
-    draw_rectangle(r.x, r.y, r.w, r.h, rgb(0x0A1020));
-    if o.card.morph == Morph::Amber || tier == Tier::Legendary {
-        let k = (t * 6.0) as usize;
-        for j in 0..PRISM.len() {
-            let cc = rgb(PRISM[(j + k) % PRISM.len()]);
-            draw_rectangle_lines(
-                r.x - j as f32 * 0.6,
-                r.y - j as f32 * 0.6,
-                r.w + j as f32 * 1.2,
-                r.h + j as f32 * 1.2,
-                1.2,
-                faded(cc, 0.8),
-            );
-        }
-    } else {
-        draw_rectangle_lines(r.x, r.y, r.w, r.h, 2.5, col);
-    }
-    let art = Rect::new(r.x + r.w * 0.08, r.y + r.h * 0.07, r.w * 0.84, r.h * 0.55);
-    draw_rectangle(art.x, art.y, art.w, art.h, rgb(0x050A14));
-    ui::draw_taxon(
-        sprites,
-        game,
-        o.card.taxon,
-        o.card.morph,
-        vec2(art.x + art.w * 0.5, art.y + art.h * 0.5),
-        art.w * 0.72,
-        WHITE,
-    );
-    let name = game.taxon(o.card.taxon).name;
-    text_centered(
-        name,
-        c.x,
-        r.y + r.h * 0.74,
-        fit_px(name, r.w * 0.9, u * 5.5),
-        TEXT,
-    );
-    text_centered(
-        tier.name(),
-        c.x,
-        r.y + r.h * 0.84,
-        fit_px(tier.name(), r.w * 0.9, u * 4.5),
-        col,
-    );
-    let tag = if o.card.new {
-        ("NEW", PINK)
-    } else if o.level_after > o.level_before {
-        ("LV UP", rgb(0xFFC56B))
-    } else {
-        ("+1", LIME)
-    };
-    text_centered(tag.0, c.x, r.y + r.h * 0.94, u * 4.5, tag.1);
-    if o.card.morph != Morph::None {
-        let m = o.card.morph.name();
-        text_centered(m, c.x, r.y - u * 2.0, fit_px(m, r.w, u * 4.5), PINK);
     }
 }

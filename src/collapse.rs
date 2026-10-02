@@ -1,7 +1,7 @@
 //! The end of the Earth: Human's gamble lost. Plays instead of the genome
 //! opening: the roll, a white flash that dithers away to the Earth frozen
 //! under snow and ash, the spiral unwinds, then a new Earth with one more RAD.
-//! A tap skips to the new Earth.
+//! It can't be skipped: a tap only closes the final black screen.
 //!
 //! The backdrop does the heavy lifting: `planet` hands it the frozen world.
 //! Motion steps at 12 fps to stay pixel-art.
@@ -110,11 +110,9 @@ impl Collapse {
         self.reset_done = true;
     }
 
-    /// Skips to the new Earth, then closes once the banner is up.
+    /// Closes it once the banner is up; it can't be skipped before.
     pub fn tap(&mut self) {
-        if self.t < RESET {
-            self.t = RESET;
-        } else if self.t >= READY {
+        if self.t >= READY {
             self.done = true;
         }
     }
