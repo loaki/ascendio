@@ -2,6 +2,7 @@
 //! let time run, evolve the genome it produced. See `docs/DESIGN.md`.
 
 mod backdrop;
+mod collapse;
 mod dial;
 mod ecology;
 mod game;
@@ -25,6 +26,7 @@ mod wait;
 use macroquad::prelude::*;
 
 use backdrop::Backdrop;
+use collapse::Collapse;
 use game::{Game, Phase};
 use layout::Layout;
 use opening::Opening;
@@ -66,6 +68,14 @@ struct Shot {
     dial: bool,
     /// `ASCENDIO_SHOT_MODE=biomes`: the map with the biome guide open.
     biomes: bool,
+    /// `ASCENDIO_SHOT_MODE=collapse`: the end of the Earth from the start
+    /// (`ASCENDIO_SHOT_AFTER` picks the moment).
+    collapse: bool,
+    /// `ASCENDIO_SHOT_MODE=backdrop`: the planet alone, no spiral or UI.
+    backdrop: bool,
+    /// `ASCENDIO_SHOT_EVERY=0.125`: also write every frame (`out_000.png`,
+    /// ...), each this many seconds of game time, for animations.
+    every: Option<f32>,
 }
 
 /// Dev aids, all read from `ASCENDIO_*` environment variables (see the
@@ -82,7 +92,7 @@ struct Dev {
     /// `ASCENDIO_DEMO_TAPS=n`: start on a ready genome and tap it `n` times.
     demo_taps: Option<u32>,
     /// `ASCENDIO_SHOT=out.png`, `ASCENDIO_SHOT_AFTER` (default 5) and
-    /// `ASCENDIO_SHOT_MODE=map|spiral|dial|keystones|settings|biomes`.
+    /// `ASCENDIO_SHOT_MODE=map|spiral|dial|keystones|settings|biomes|collapse|backdrop`.
     shot: Option<Shot>,
 }
 
@@ -95,13 +105,16 @@ impl Dev {
             after: env_parse("ASCENDIO_SHOT_AFTER").unwrap_or(5.0),
             mode: match shot_mode.as_deref() {
                 Some("map" | "biomes") => Some(Mode::Map),
-                Some("spiral" | "dial") => Some(Mode::Spiral),
+                Some("spiral" | "dial" | "backdrop") => Some(Mode::Spiral),
                 Some("keystones") => Some(Mode::Keystones),
                 Some("settings") => Some(Mode::Settings),
                 _ => None,
             },
             dial: shot_mode.as_deref() == Some("dial"),
             biomes: shot_mode.as_deref() == Some("biomes"),
+            collapse: shot_mode.as_deref() == Some("collapse"),
+            backdrop: shot_mode.as_deref() == Some("backdrop"),
+            every: env_parse("ASCENDIO_SHOT_EVERY").filter(|&v: &f32| v > 0.0),
         });
         Self {
             time_scale: env_parse("ASCENDIO_TIME_SCALE")
@@ -214,6 +227,14 @@ async fn main() {
     // The biome guide, opened from the map.
     let mut biomes_open = false;
     let mut opening: Option<Opening> = None;
+    // Human ended the Earth: plays instead of the opening.
+    let mut collapse: Option<Collapse> = dev
+        .shot
+        .as_ref()
+        .filter(|s| s.collapse)
+        .map(|_| Collapse::new());
+    // The radiation panel under the RAD badge.
+    let mut rad_info = false;
     let mut boon_hover: Option<usize> = None;
     let mut pinch_accum = 1.0f32;
     let mut last_phase = game.phase();
@@ -225,11 +246,18 @@ async fn main() {
     let mut cancel_armed = false;
 
     let mut elapsed = 0.0f32;
+    // Frames written by `ASCENDIO_SHOT_EVERY`.
+    let mut frame_no = 0u32;
     let mut save_timer = 0.0f32;
     let mut autoplay_timer = 0.0f32;
 
     loop {
-        let dt = get_frame_time();
+        // Recording frames: a fixed step, however slow the export.
+        let dt = dev
+            .shot
+            .as_ref()
+            .and_then(|s| s.every)
+            .unwrap_or_else(get_frame_time);
         elapsed += dt;
         let t_now = now();
         game.tick(t_now);
@@ -298,11 +326,25 @@ async fn main() {
         };
 
         // Overlays eat taps first.
-        if let Some(op) = &mut opening {
-            if let Some(p) = tap.take() {
+        if let Some(c) = &mut collapse {
+            if tap.take().is_some() {
+                c.tap();
+            }
+        } else if rad_info {
+            if tap.take().is_some() {
+                rad_info = false;
+            }
+        } else if tap.is_some_and(|p| {
+            matches!(mode, Mode::Spiral | Mode::Map | Mode::Keystones)
+                && ui::rad_badge_rect(&game).is_some_and(|b| b.contains(p))
+        }) {
+            rad_info = true;
+            tap = None;
+        } else if let Some(op) = &mut opening {
+            if tap.take().is_some() {
                 let results = op.wants_results().then(|| game.open_genome(t_now));
                 let discovered = results.as_ref().and_then(|r| deepest(&game, r));
-                op.tap(p, results);
+                op.tap(results);
                 if let Some(new) = discovered {
                     layout = map_layout(&game);
                     nav.go_to(&game, new);
@@ -406,7 +448,8 @@ async fn main() {
                         mode = Mode::Spiral;
                     }
                     Phase::Genome => {
-                        opening = Some(Opening::new(&game, (t_now * 1000.0) as u32));
+                        evolve(&game, &mut opening, &mut collapse, t_now);
+                        mode = Mode::Spiral;
                     }
                     _ => {}
                 }
@@ -420,7 +463,7 @@ async fn main() {
                 && game.phase() == Phase::Genome
                 && ui::panel_rect().contains(p)
             {
-                opening = Some(Opening::new(&game, (t_now * 1000.0) as u32));
+                evolve(&game, &mut opening, &mut collapse, t_now);
                 tap = None;
             }
         }
@@ -574,6 +617,22 @@ async fn main() {
         if let Some(op) = &mut opening {
             op.update(dt);
         }
+        if let Some(c) = &mut collapse {
+            c.update(dt);
+            if c.wants_reset() {
+                game.end_earth();
+                nav = Nav::new(&game);
+                layout = map_layout(&game);
+                mode = Mode::Spiral;
+                detail = None;
+                choosing = false;
+                c.reset_done();
+                save(&game);
+            }
+            if c.is_done() {
+                collapse = None;
+            }
+        }
 
         let capture = dev.shot.as_ref().filter(|s| elapsed >= s.after);
         if let Some(shot) = capture {
@@ -590,6 +649,7 @@ async fn main() {
         match mode {
             Mode::Spiral => {
                 let shown = game.cycle.map(|c| c.launched).unwrap_or(game.planet);
+                let shown = collapse.as_ref().map_or(shown, |c| c.planet(shown));
                 // The world hurries while time runs; accumulated so it never jumps.
                 let speed = if game.phase() == Phase::Running {
                     2.5
@@ -598,18 +658,24 @@ async fn main() {
                 };
                 world_t += dt * speed;
                 backdrop.draw(&shown, world_t, t, dt);
-                if choosing {
-                    dial::draw(game.wait_hours, &sprites, &assets);
+                // `ASCENDIO_SHOT_MODE=backdrop`: nothing but the planet.
+                if !dev.shot.as_ref().is_some_and(|s| s.backdrop) {
+                    if choosing {
+                        dial::draw(game.wait_hours, &sprites, &assets);
+                    }
+                    let frame = Frame::build(&game, &nav, &measure);
+                    render::draw_spiral(&game, &frame, nav.t, nav.last(), &sprites);
+                    ui::draw_hud(&game, t_now, &assets);
+                    // The end of the Earth gets the whole screen.
+                    if collapse.is_none() {
+                        if choosing {
+                            ui::draw_wait_panel(&game, &sprites);
+                        } else {
+                            ui::draw_lever_panel(&game, t_now, &assets, &sprites, cancel_armed);
+                        }
+                        ui::draw_bottom_bar(&game, t_now, None, choosing, &assets);
+                    }
                 }
-                let frame = Frame::build(&game, &nav, &measure);
-                render::draw_spiral(&game, &frame, nav.t, nav.last(), &sprites);
-                ui::draw_hud(&game, t_now, &assets);
-                if choosing {
-                    ui::draw_wait_panel(&game, &sprites);
-                } else {
-                    ui::draw_lever_panel(&game, t_now, &assets, &sprites, cancel_armed);
-                }
-                ui::draw_bottom_bar(&game, t_now, None, choosing, &assets);
             }
             Mode::Map => {
                 render::draw_map(&game, &layout, &cam, &sprites);
@@ -644,7 +710,18 @@ async fn main() {
         if let Some(op) = &mut opening {
             op.draw(&game, &sprites, &assets);
         }
+        if rad_info {
+            ui::draw_rad_info(&game);
+        }
+        if let Some(c) = &mut collapse {
+            c.draw(game.rad, game.fossils());
+        }
 
+        if let Some(shot) = dev.shot.as_ref().filter(|s| s.every.is_some()) {
+            let stem = shot.path.trim_end_matches(".png");
+            get_screen_data().export_png(&format!("{stem}_{frame_no:03}.png"));
+            frame_no += 1;
+        }
         if let Some(shot) = capture {
             get_screen_data().export_png(&shot.path);
             println!(
@@ -683,10 +760,20 @@ fn run_autoplay(game: &mut Game, now: f64) {
             game.accelerate(now);
         }
         Phase::Running => game.skip_cycle(now),
+        Phase::Genome if game.doomed => game.end_earth(),
         Phase::Genome => {
             game.open_genome(now);
         }
         Phase::Boon => game.choose_boon(0),
+    }
+}
+
+/// EVOLVE IT: the genome opens, unless Human's gamble ends the Earth.
+fn evolve(game: &Game, opening: &mut Option<Opening>, collapse: &mut Option<Collapse>, now: f64) {
+    if game.doomed {
+        *collapse = Some(Collapse::new());
+    } else {
+        *opening = Some(Opening::new(game, (now * 1000.0) as u32));
     }
 }
 

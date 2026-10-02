@@ -97,6 +97,9 @@ fn draw_coil(frame: &Frame, t: f32, last: f32) {
 
 /// A taxon's tier colour once discovered, the locked border before.
 fn accent_of(game: &Game, taxon: usize) -> Color {
+    if game.is_fossil(taxon) {
+        return rgb(0x6A6256);
+    }
     if !game.unlocked[taxon] {
         return LOCKED_BORDER;
     }
@@ -147,7 +150,17 @@ fn draw_chip(game: &Game, sprites: &Sprites, c: Chip) {
     let icon_center = Vec2::new(x + h * 0.14 + icon * 0.5, c.pos.y);
     let group = game.taxon(c.taxon).group;
     let anim = sprites::pose(group, c.taxon, get_time());
-    let tint = faded(if c.unlocked { WHITE } else { SILHOUETTE }, c.fade);
+    let fossil = game.is_fossil(c.taxon);
+    let tint = faded(
+        if c.unlocked {
+            WHITE
+        } else if fossil {
+            crate::ui::STONE
+        } else {
+            SILHOUETTE
+        },
+        c.fade,
+    );
     sprites::draw_sprite(sprites.get(c.taxon), icon_center, icon, anim, tint);
 
     let text_x0 = x + h * 0.14 + icon + h * 0.10;
@@ -157,7 +170,16 @@ fn draw_chip(game: &Game, sprites: &Sprites, c: Chip) {
         text_x0,
         c.pos.y + c.px * 0.34,
         fit_px(c.label, text_w, c.px),
-        faded(if c.unlocked { TEXT } else { LOCKED_TEXT }, c.fade),
+        faded(
+            if c.unlocked {
+                TEXT
+            } else if fossil {
+                crate::ui::STONE_TEXT
+            } else {
+                LOCKED_TEXT
+            },
+            c.fade,
+        ),
     );
 }
 
@@ -306,7 +328,14 @@ fn draw_nodes(game: &Game, layout: &Layout, cam: &Camera, sprites: &Sprites) {
         let icon = h * 0.82;
         let icon_center = Vec2::new(x + h * 0.20 + icon * 0.5, center.y);
         let anim = sprites::pose(game.taxon(i).group, i, get_time());
-        let tint = if found { WHITE } else { SILHOUETTE };
+        let fossil = game.is_fossil(i);
+        let tint = if found {
+            WHITE
+        } else if fossil {
+            crate::ui::STONE
+        } else {
+            SILHOUETTE
+        };
         sprites::draw_sprite(sprites.get(i), icon_center, icon, anim, tint);
 
         let text_x0 = x + h * 0.20 + icon + h * 0.12;
@@ -333,6 +362,15 @@ fn draw_nodes(game: &Game, layout: &Layout, cam: &Camera, sprites: &Sprites) {
                 center.y + name_px * 0.4 + sub_px,
                 fit_px(&sub, text_w, sub_px),
                 TEXT_DIM,
+            );
+        } else if fossil {
+            let name = game.taxon(i).name;
+            text(
+                name,
+                text_x0,
+                center.y + name_px * 0.35,
+                fit_px(name, text_w, name_px),
+                crate::ui::STONE_TEXT,
             );
         } else {
             text_centered(

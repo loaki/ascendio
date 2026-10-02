@@ -102,6 +102,12 @@ pub fn morph_of_bit(bit: u8) -> Morph {
         .unwrap_or(Morph::None)
 }
 
+/// The chance a genome opened with Human ends the Earth.
+pub const DOOM_CHANCE: f32 = 0.2;
+/// Per RAD: luck past the cap, and morph chance added (x1.5, x2, ...).
+pub const RAD_LUCK: f32 = 5.0;
+pub const RAD_MORPH: f32 = 0.5;
+
 /// Most charges a growing keystone holds.
 const MAX_CHARGES: u8 = 10;
 /// Starfish charges: each a third of a card.
@@ -141,7 +147,8 @@ pub enum Gain {
     FewerBoons,
     LongerWait(f64),
     TempMin(u8),
-    VegMax(u8),
+    /// The chance a genome ends the Earth instead of opening.
+    Doom(f32),
 }
 
 impl Gain {
@@ -216,7 +223,7 @@ impl Gain {
             Gain::FewerBoons => "-1 boon".into(),
             Gain::LongerWait(s) => format!("+{:.0}h wait", s / 3600.0),
             Gain::TempMin(_) => "Temperature locked".into(),
-            Gain::VegMax(_) => "Vegetation capped".into(),
+            Gain::Doom(p) => format!("{:.0}% the Earth ends", p * 100.0),
         }
     }
 }
@@ -237,7 +244,7 @@ impl Report {
         let parts: Vec<String> = self
             .gains
             .iter()
-            .filter(|g| !matches!(g, Gain::TempMin(_) | Gain::VegMax(_)))
+            .filter(|g| !matches!(g, Gain::TempMin(_)))
             .map(|g| g.label())
             .collect();
         if parts.is_empty() {
@@ -294,6 +301,14 @@ struct SaveData {
     last_launched: Option<Planet>,
     #[serde(default = "default_points")]
     wait_points: u8,
+    #[serde(default)]
+    rad: u32,
+    #[serde(default)]
+    fossil: Vec<bool>,
+    #[serde(default)]
+    doomed: bool,
+    #[serde(default)]
+    doom_risk: f32,
 }
 
 pub struct Game {
@@ -334,6 +349,15 @@ pub struct Game {
     pub last_launched: Option<Planet>,
     /// Adjustment points the last wait gave this shaping, before keystones.
     pub wait_points: u8,
+    /// Earths Human has ended: each one boosts rarity and morphs.
+    pub rad: u32,
+    /// Every taxon found on any Earth. One not found on this Earth is a
+    /// fossil: it keeps its level and morphs and waits to be found again.
+    pub fossil: Vec<bool>,
+    /// The waiting genome ends the Earth when opened (rolled with it).
+    pub doomed: bool,
+    /// The chance that roll had, to show while the genome waits.
+    pub doom_risk: f32,
 }
 
 impl Game {
@@ -371,7 +395,12 @@ impl Game {
             edition: vec![0; n],
             last_launched: None,
             wait_points: planet::BASE_POINTS,
+            rad: 0,
+            fossil: vec![false; n],
+            doomed: false,
+            doom_risk: 0.0,
         };
+        game.fossil[Phylogeny::ROOT] = true;
         game.refresh_levels();
         game
     }
@@ -405,6 +434,10 @@ impl Game {
             edition: self.edition.clone(),
             last_launched: self.last_launched,
             wait_points: self.wait_points,
+            rad: self.rad,
+            fossil: self.fossil.clone(),
+            doomed: self.doomed,
+            doom_risk: self.doom_risk,
         };
         serde_json::to_string(&data).unwrap_or_default()
     }
@@ -437,6 +470,10 @@ impl Game {
         d.held.resize(n, 0);
         d.gone.resize(n, false);
         d.edition.resize(n, 0);
+        d.fossil.resize(n, false);
+        for (f, &u) in d.fossil.iter_mut().zip(&d.unlocked) {
+            *f |= u;
+        }
         let mut game = Self {
             phy,
             unlocked: d.unlocked,
@@ -462,6 +499,10 @@ impl Game {
             edition: d.edition,
             last_launched: d.last_launched,
             wait_points: d.wait_points,
+            rad: d.rad,
+            fossil: d.fossil,
+            doomed: d.doomed,
+            doom_risk: d.doom_risk,
         };
         game.refresh_levels();
         game.tick(now);
@@ -764,7 +805,11 @@ impl Game {
                     Rule::Catch(c) => match c {
                         Catch::Tyrant => vec![Gain::Cards(2.0 * mult)],
                         Catch::Apex => vec![Gain::LuckMult(2.0), Gain::TempMin(3)],
-                        Catch::Farmer => vec![Gain::Points(2), Gain::VegMax(3)],
+                        Catch::Hubris => vec![
+                            Gain::LuckMult(2.0),
+                            Gain::Cards(2.0 * mult),
+                            Gain::Doom(DOOM_CHANCE),
+                        ],
                         Catch::Feathers => vec![Gain::MorphMult(3.0), Gain::FewerBoons],
                         Catch::Ancient => vec![Gain::Pity(25), Gain::LongerWait(3600.0)],
                         Catch::Wildcard => base(s),
@@ -860,11 +905,10 @@ impl Game {
                 Gain::FewerBoons => e.fewer_boons = true,
                 Gain::LongerWait(s) => e.longer_wait += s,
                 Gain::TempMin(t) => e.temp_min = e.temp_min.max(t),
-                Gain::VegMax(v) => e.veg_max = e.veg_max.min(v),
+                Gain::Doom(p) => e.doom = e.doom.max(p),
             }
         }
         e.luck = (e.luck * luck_mult).min(15.0);
-        e.extra_card = e.extra_card.min(3.0);
         e.morph = e.morph.min(2.0);
         e.quick = e.quick.min(0.3);
         match self.boon {
@@ -888,9 +932,6 @@ impl Game {
                             "{name} holds it at {} or warmer",
                             planet::temperature_label(t)
                         ));
-                    }
-                    (Gain::VegMax(m), Lever::Vegetation) if delta > 0 && v >= m => {
-                        return Some(format!("{name} keeps it at {m} or less"));
                     }
                     _ => {}
                 }
@@ -1027,14 +1068,15 @@ impl Game {
         for (a, add) in affinity.iter_mut().zip(e.affinity) {
             *a += add;
         }
-        let cards = (w.cards + e.extra_card).min(genome::MAX_CARDS as f32);
+        let cards = w.cards + e.extra_card;
         Forecast {
             cards,
             ma: wait::ma(hours),
             points: wait::points(hours),
             odds: Odds {
                 cards: cards.floor() as usize,
-                luck: (e.luck + w.luck).min(15.0),
+                // Radiation adds past the usual cap.
+                luck: (e.luck + w.luck).min(15.0) + RAD_LUCK * self.rad as f32,
                 morph_mult: (1.0 + e.morph)
                     * e.morph_mult_boon
                     * e.morph_mult_keystone
@@ -1051,6 +1093,7 @@ impl Game {
                 after_rare_luck: e.after_rare_luck,
                 after_new_morph: e.after_new_morph,
                 no_new_pity: e.no_new_pity,
+                morph_rad: 1.0 + RAD_MORPH * self.rad as f32,
             },
         }
     }
@@ -1115,6 +1158,10 @@ impl Game {
             &mut self.rng,
         );
         self.genome = Some(rolled);
+        // Decided with the genome, so reopening the app can't reroll it.
+        let doom = self.effects().doom;
+        self.doom_risk = doom;
+        self.doomed = doom > 0.0 && self.rng.chance(doom);
         self.advance_keystones(cycle.launched);
         // The tutorial cycles keep the starting budget.
         self.wait_points = if self.wait_choosable() {
@@ -1149,6 +1196,7 @@ impl Game {
         let Some(cards) = self.genome.take() else {
             return Vec::new();
         };
+        self.doom_risk = 0.0;
         let ma = self.ma_elapsed(now);
         let e = self.effects();
         let double = e.double_specimens;
@@ -1167,7 +1215,13 @@ impl Game {
             let level_before = self.level[t];
             if card.new && !self.unlocked[t] {
                 self.unlocked[t] = true;
-                self.specimens[t] = 1;
+                // A fossil found again keeps its specimens and levels.
+                self.specimens[t] = if self.fossil[t] {
+                    self.specimens[t] + 1
+                } else {
+                    1
+                };
+                self.fossil[t] = true;
                 self.found_ma[t] = Some(ma);
             } else {
                 self.specimens[t] += if double { 2 } else { 1 };
@@ -1255,6 +1309,50 @@ impl Game {
         self.shaped_from = self.planet;
     }
 
+    /// Fossils: found on an earlier Earth, not yet on this one.
+    pub fn is_fossil(&self, taxon: usize) -> bool {
+        self.fossil[taxon] && !self.unlocked[taxon]
+    }
+
+    pub fn fossils(&self) -> usize {
+        (0..self.phy.len()).filter(|&i| self.is_fossil(i)).count()
+    }
+
+    /// Human ended the Earth: +1 RAD and a new Earth from the Urmetazoan.
+    /// Every animal found stays a fossil with its specimens and morphs;
+    /// the planet, the spiral, Ma, keystones, pity and the genome reset.
+    pub fn end_earth(&mut self) {
+        let n = self.phy.len();
+        self.rad += 1;
+        for (f, &u) in self.fossil.iter_mut().zip(&self.unlocked) {
+            *f |= u;
+        }
+        self.unlocked = vec![false; n];
+        self.unlocked[Phylogeny::ROOT] = true;
+        self.found_ma = vec![None; n];
+        self.found_ma[Phylogeny::ROOT] = Some(0);
+        self.planet = Planet::default();
+        self.shaped_from = self.planet;
+        self.cycle = None;
+        self.ma_done = 0;
+        self.genome = None;
+        self.doomed = false;
+        self.doom_risk = 0.0;
+        self.pity = Pity {
+            ever_morphed: self.pity.ever_morphed,
+            ..Pity::default()
+        };
+        self.keystones.clear();
+        self.boon = None;
+        self.boon_offer = None;
+        self.charges = vec![0; n];
+        self.held = vec![0; n];
+        self.gone = vec![false; n];
+        self.last_launched = None;
+        self.wait_points = planet::BASE_POINTS;
+        self.refresh_levels();
+    }
+
     /// Specimens toward `taxon`'s next level, and the step size.
     pub fn level_progress(&self, taxon: usize) -> (u32, u32) {
         let lv = self.level[taxon].max(1);
@@ -1308,9 +1406,10 @@ pub struct Effects {
     pub fewer_boons: bool,
     /// Seconds added to the wait.
     pub longer_wait: f64,
-    /// Lever limits keystones impose.
+    /// The lowest Temperature a keystone allows.
     pub temp_min: u8,
-    pub veg_max: u8,
+    /// The chance the next genome ends the Earth (Human).
+    pub doom: f32,
 }
 
 impl Default for Effects {
@@ -1336,7 +1435,7 @@ impl Default for Effects {
             fewer_boons: false,
             longer_wait: 0.0,
             temp_min: 0,
-            veg_max: planet::LEVEL_MAX,
+            doom: 0.0,
         }
     }
 }
@@ -1833,5 +1932,97 @@ mod tests {
         }
         assert!(!g.keystones.contains(&dodo));
         assert!(!g.toggle_keystone(dodo), "gone until found again");
+    }
+
+    /// A sea world where the Human keystone is awake for the tests.
+    fn with_human() -> (Game, usize) {
+        let mut g = Game::new(0.0);
+        g.planet = Planet {
+            land: 4,
+            vegetation: 2,
+            oxygen: 3,
+            temperature: 3,
+            volcanism: 0,
+        };
+        let human = equip(&mut g, "Human");
+        (g, human)
+    }
+
+    #[test]
+    fn human_doubles_luck_adds_cards_and_risks_the_earth() {
+        let (g, human) = with_human();
+        let r = report(&g, human);
+        assert_eq!(r.status, Status::Active);
+        let e = g.effects();
+        assert_eq!(e.doom, DOOM_CHANCE);
+        assert!(e.extra_card >= 2.0);
+        assert!(r.gains.contains(&Gain::LuckMult(2.0)));
+    }
+
+    #[test]
+    fn about_one_genome_in_five_is_doomed_with_human() {
+        let (mut g, _) = with_human();
+        g.cycles_done = planet::TUTORIAL_CYCLES;
+        let mut now = 0.0;
+        let mut doomed = 0;
+        for _ in 0..200 {
+            g.keystones = vec![g.keystones[0]];
+            g.planet = with_human().0.planet;
+            g.accelerate(now);
+            now += g.cycle.unwrap().duration + 1.0;
+            g.tick(now);
+            assert_eq!(g.doom_risk, DOOM_CHANCE);
+            doomed += g.doomed as u32;
+            g.genome = None;
+            g.doomed = false;
+        }
+        assert!((20..=60).contains(&doomed), "{doomed} of 200");
+    }
+
+    #[test]
+    fn ending_the_earth_keeps_fossils_and_adds_rad() {
+        let (mut g, human) = with_human();
+        g.specimens[human] = 9;
+        g.morphs[human] = morph_bit(Morph::Amber);
+        g.ma_done = 500;
+        g.end_earth();
+        assert_eq!(g.rad, 1);
+        assert_eq!(g.discovered(), 1, "back to the Urmetazoan");
+        assert!(g.is_fossil(human));
+        assert_eq!(g.fossils(), 1);
+        assert!(g.keystones.is_empty());
+        assert_eq!(g.ma_done, 0);
+        assert_eq!(g.planet, Planet::default());
+        assert_eq!(g.morphs[human], morph_bit(Morph::Amber), "morphs kept");
+        assert!(!g.toggle_keystone(human), "a fossil must be found again");
+        let odds = g.forecast().odds;
+        assert!(odds.luck >= RAD_LUCK && odds.morph_rad == 1.0 + RAD_MORPH);
+    }
+
+    #[test]
+    fn a_fossil_found_again_keeps_its_level() {
+        let (mut g, human) = with_human();
+        g.specimens[human] = 9;
+        g.end_earth();
+        g.genome = Some(vec![Card {
+            taxon: human,
+            tier: Tier::Legendary,
+            morph: Morph::None,
+            new: true,
+            note: None,
+        }]);
+        g.open_genome(0.0);
+        assert!(g.unlocked[human] && !g.is_fossil(human));
+        assert_eq!(g.specimens[human], 10);
+        assert_eq!(g.level[human], level_for(10));
+    }
+
+    #[test]
+    fn cards_are_no_longer_capped() {
+        let (mut g, _) = with_human();
+        g.cycles_done = planet::TUTORIAL_CYCLES;
+        g.set_wait(6.0);
+        g.boon = Some(Boon::Lens);
+        assert!(g.forecast().odds.cards >= 8, "5 + 2 + 1");
     }
 }

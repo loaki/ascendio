@@ -21,6 +21,11 @@ pub const PINK: Color = rgb(0xFF7AB8);
 /// Multiply tint for a keystone the planet can't support right now.
 const DORMANT: Color = Color::new(0.42, 0.44, 0.5, 1.0);
 pub const LIME: Color = rgb(0xC5F76A);
+/// Radiation: the RAD badge and the new Earth.
+pub const RAD_COLOR: Color = rgb(0xD4F542);
+/// Multiply tint for a fossil: an animal found on an earlier Earth.
+pub const STONE: Color = Color::new(0.58, 0.53, 0.46, 1.0);
+pub const STONE_TEXT: Color = rgb(0x9A9182);
 /// A keystone's drawback, or a lever it holds.
 const LOCK_RED: Color = rgb(0xFF6A4A);
 
@@ -200,13 +205,112 @@ fn draw_top_bar() {
     draw_line(0.0, bar_h, sw, bar_h, 1.0, EDGE);
 }
 
+/// The trefoil: three blades round a dot, `r` the blade radius.
+pub fn draw_rad_icon(c: Vec2, r: f32, col: Color) {
+    use std::f32::consts::PI;
+    draw_circle(c.x, c.y, r * 0.2, col);
+    for blade in 0..3 {
+        let mid = -PI / 2.0 + blade as f32 * PI * 2.0 / 3.0;
+        let slices = 5;
+        for k in 0..slices {
+            let a0 = mid - PI / 6.0 + PI / 3.0 * k as f32 / slices as f32;
+            let a1 = mid - PI / 6.0 + PI / 3.0 * (k + 1) as f32 / slices as f32;
+            let p = |a: f32, rr: f32| c + vec2(a.cos(), a.sin()) * rr;
+            let (i0, o0, o1, i1) = (p(a0, r * 0.36), p(a0, r), p(a1, r), p(a1, r * 0.36));
+            draw_triangle(i0, o0, o1, col);
+            draw_triangle(i0, o1, i1, col);
+        }
+    }
+}
+
+/// The RAD badge, left of the gear, once Human has ended an Earth.
+pub fn rad_badge_rect(game: &Game) -> Option<Rect> {
+    if game.rad == 0 {
+        return None;
+    }
+    let g = gear_rect();
+    let h = g.h * 0.72;
+    let w = h * 2.6;
+    Some(Rect::new(g.x - w - u() * 3.0, g.y + (g.h - h) * 0.5, w, h))
+}
+
+fn draw_rad_badge(game: &Game) {
+    let Some(r) = rad_badge_rect(game) else {
+        return;
+    };
+    frame(r, rgb(0x1C2410), RAD_COLOR, 1.0);
+    let icon = r.h * 0.32;
+    draw_rad_icon(vec2(r.x + r.h * 0.45, r.y + r.h * 0.5), icon, RAD_COLOR);
+    let label = format!("{} RAD", game.rad);
+    let px = r.h * 0.5;
+    text(
+        &label,
+        r.x + r.h * 0.85,
+        r.y + r.h * 0.68,
+        fit_px(&label, r.w - r.h * 0.95, px),
+        RAD_COLOR,
+    );
+}
+
+/// What the radiation gives, under the badge (tap the badge).
+pub fn draw_rad_info(game: &Game) {
+    let Some(b) = rad_badge_rect(game) else {
+        return;
+    };
+    let u = u();
+    let w = screen_width() * 0.62;
+    let r = Rect::new(
+        screen_width() - w - u * 4.0,
+        b.y + b.h + u * 4.0,
+        w,
+        u * 30.0,
+    );
+    frame(r, rgb(0x0A0E08), RAD_COLOR, 1.5);
+    let px = u * 6.0;
+    let x = r.x + u * 4.0;
+    text(
+        &format!("RADIATION  ·  EARTH {}", game.rad + 1),
+        x,
+        r.y + u * 9.0,
+        px,
+        RAD_COLOR,
+    );
+    let perks = format!(
+        "+{:.0} Luck  ·  +{:.0}% morphs",
+        game::RAD_LUCK * game.rad as f32,
+        game::RAD_MORPH * game.rad as f32 * 100.0
+    );
+    text(
+        &perks,
+        x,
+        r.y + u * 17.0,
+        fit_px(&perks, r.w - u * 8.0, px),
+        LIME,
+    );
+    let times = if game.rad == 1 { "once" } else { "times" };
+    let why = if game.rad == 1 {
+        format!("Human ended the Earth {times}")
+    } else {
+        format!("Human ended the Earth {} {times}", game.rad)
+    };
+    text(
+        &why,
+        x,
+        r.y + u * 25.0,
+        fit_px(&why, r.w - u * 8.0, px * 0.85),
+        TEXT_DIM,
+    );
+}
+
 pub fn draw_hud(game: &Game, now: f64, assets: &Assets) {
     let bar_h = render::bar_height();
     let px = bar_h * 0.34;
     draw_top_bar();
     draw_gear(assets, false);
-    // Text stops short of the gear.
-    let max_w = gear_rect().x - px * 1.4;
+    draw_rad_badge(game);
+    // Text stops short of the badge and the gear.
+    let right = rad_badge_rect(game).map_or(gear_rect().x, |b| b.x);
+    let max_w = right - px * 1.4;
     let head = format!("{} Ma  ·  {}", game.ma_elapsed(now), game.era());
     text(
         &head,
@@ -216,13 +320,22 @@ pub fn draw_hud(game: &Game, now: f64, assets: &Assets) {
         TEXT,
     );
     let best = game.most_advanced();
-    let sub = format!(
-        "{} / {} found  ·  step {}  {}",
-        game.discovered(),
-        game.phy.len(),
-        game.taxon(best).depth,
-        game.taxon(best).name
-    );
+    let fossils = game.fossils();
+    let sub = if fossils > 0 {
+        format!(
+            "{} / {} found  ·  {fossils} fossils",
+            game.discovered(),
+            game.phy.len()
+        )
+    } else {
+        format!(
+            "{} / {} found  ·  step {}  {}",
+            game.discovered(),
+            game.phy.len(),
+            game.taxon(best).depth,
+            game.taxon(best).name
+        )
+    };
     text(
         &sub,
         px * 0.7,
@@ -487,6 +600,19 @@ pub fn draw_lever_panel(
                 px,
                 faded(TEXT, 0.7),
             );
+            if game.doom_risk > 0.0 {
+                let warn = format!(
+                    "HUMAN: {:.0}% THIS GENOME ENDS THE EARTH",
+                    game.doom_risk * 100.0
+                );
+                text_centered(
+                    &warn,
+                    cx,
+                    r.y + r.h * 0.86,
+                    fit_px(&warn, r.w * 0.9, px),
+                    LOCK_RED,
+                );
+            }
         }
         Phase::Shape => {
             text(
@@ -716,8 +842,13 @@ pub fn draw_wait_panel(game: &Game, sprites: &Sprites) {
     let sure = f.odds.cards;
     let chance = f.cards.fract();
     let col = dial::color(game.wait_hours);
-    for k in 0..genome::MAX_CARDS {
-        let cx = x + k as f32 * (cw + u * 1.5);
+    // As many slots as cards (no cap), squeezed into the room of six.
+    let area = 6.0 * (cw + u * 1.5);
+    let slots = (sure + (chance > 0.0) as usize).max(1);
+    let step = (area / slots as f32).min(cw + u * 1.5);
+    let cw = cw.min(step - u * 0.5);
+    for k in 0..slots {
+        let cx = x + k as f32 * step;
         let (fill, edge) = if k < sure {
             (rgb(0x0A1020), col)
         } else if k == sure && chance > 0.0 {
@@ -727,7 +858,7 @@ pub fn draw_wait_panel(game: &Game, sprites: &Sprites) {
         };
         frame(Rect::new(cx, y, cw, ch), fill, edge, 1.5);
     }
-    let tx = x + genome::MAX_CARDS as f32 * (cw + u * 1.5) + u * 2.0;
+    let tx = x + area + u * 2.0;
     let cards = if chance > 0.0 {
         format!("{sure} cards  ·  {:.0}% for one more", chance * 100.0)
     } else {
@@ -747,7 +878,7 @@ pub fn draw_wait_panel(game: &Game, sprites: &Sprites) {
         (
             format!(
                 "{:.1}% of cards are morphs",
-                genome::morph_chance(f.odds.morph_mult) * 100.0
+                (genome::morph_chance(f.odds.morph_mult) * f.odds.morph_rad).min(1.0) * 100.0
             ),
             PINK,
         )
@@ -894,6 +1025,12 @@ pub fn draw_bottom_bar(
             TEXT_DIM,
             false,
         ),
+        Phase::Genome if game.doom_risk > 0.0 => (
+            "EVOLVE IT".to_string(),
+            format!("{:.0}% the Earth ends", game.doom_risk * 100.0),
+            ACCENT_WARN,
+            true,
+        ),
         Phase::Genome => (
             "EVOLVE IT".to_string(),
             "a new genome is ready".to_string(),
@@ -993,6 +1130,11 @@ pub fn keystone_morph_rect() -> Rect {
     Rect::new(r.x + r.w * 0.64, r.y + r.h * 0.74, r.w * 0.32, r.h * 0.2)
 }
 
+/// A fossil's level: kept from the Earth it was found on.
+fn level_for_fossil(game: &Game, t: usize) -> u32 {
+    game::level_for(game.specimens[t].max(1))
+}
+
 /// A morph's name on a coloured tab, bottom-left at (`x`, `bottom`).
 fn morph_badge(m: Morph, x: f32, bottom: f32, h: f32) {
     let (fill, ink) = match m {
@@ -1008,8 +1150,13 @@ fn morph_badge(m: Morph, x: f32, bottom: f32, h: f32) {
     text(&label, x + h * 0.2, bottom - h * 0.22, px, ink);
 }
 
+/// Found animals, then the fossils waiting to be found again.
 fn collection(game: &Game) -> Vec<usize> {
-    (0..game.phy.len()).filter(|&i| game.unlocked[i]).collect()
+    let n = game.phy.len();
+    (0..n)
+        .filter(|&i| game.unlocked[i])
+        .chain((0..n).filter(|&i| game.is_fossil(i)))
+        .collect()
 }
 
 pub fn keystone_cell_at(game: &Game, view: &KeystoneView, p: Vec2) -> Option<usize> {
@@ -1181,15 +1328,20 @@ pub fn draw_keystones(
         let sel = view.selected == Some(t);
         let tier = ecology::of(game.taxon(t).name).tier;
         let dormant = game.dormant_reason(t).is_some();
+        let fossil = game.is_fossil(t);
         frame(
             r,
             if equipped {
                 rgb(0x12213A)
+            } else if fossil {
+                rgb(0x14120F)
             } else {
                 rgb(0x0A1020)
             },
             if sel {
                 WHITE
+            } else if fossil {
+                rgb(0x4A443C)
             } else if equipped && dormant {
                 ACCENT_WARN
             } else if equipped {
@@ -1206,7 +1358,13 @@ pub fn draw_keystones(
             best_morph(game, t),
             vec2(r.x + r.w * 0.5, r.y + r.h * 0.5),
             r.w * 0.7,
-            if dormant { DORMANT } else { WHITE },
+            if fossil {
+                STONE
+            } else if dormant {
+                DORMANT
+            } else {
+                WHITE
+            },
         );
     }
     // The info panel's own background hides the scrolled overflow.
@@ -1259,6 +1417,13 @@ pub fn draw_keystones(
                 text(line, tx, y, fit_px(line, col_w, px), *c);
             }
             let (status, status_col) = match game.dormant_reason(t) {
+                _ if game.is_fossil(t) => (
+                    format!(
+                        "Fossil  ·  Lv {}  ·  find it again to equip",
+                        level_for_fossil(game, t)
+                    ),
+                    STONE_TEXT,
+                ),
                 Some(why) => (format!("Asleep here: {why}"), ACCENT_WARN),
                 None => (
                     format!(
@@ -1307,6 +1472,7 @@ pub fn draw_keystones(
             }
             let equipped = game.keystones.contains(&t);
             let can = game.keystones_editable()
+                && game.unlocked[t]
                 && (equipped || game.keystones.len() < game.keystone_slots());
             let b = keystone_equip_rect();
             frame(
@@ -1391,11 +1557,19 @@ pub fn draw_detail(game: &Game, taxon: usize, sprites: &Sprites, assets: &Assets
             Morph::None,
             vec2(cx, sy),
             r.w * 0.34,
-            SILHOUETTE,
+            if game.is_fossil(taxon) {
+                STONE
+            } else {
+                SILHOUETTE
+            },
         );
     }
     let px = r.w * 0.045;
-    let name = if found { t.name } else { "? ? ?" };
+    let name = if found || game.is_fossil(taxon) {
+        t.name
+    } else {
+        "? ? ?"
+    };
     text_centered(
         name,
         cx,
@@ -1403,13 +1577,21 @@ pub fn draw_detail(game: &Game, taxon: usize, sprites: &Sprites, assets: &Assets
         fit_px(name, r.w * 0.9, px * 1.8),
         TEXT,
     );
-    let sub = format!("{}  ·  {}  ·  {}", t.clade, t.age_label(), eco.tier.name());
+    let sub = if game.is_fossil(taxon) {
+        format!("FOSSIL  ·  {}  ·  {}", t.clade, eco.tier.name())
+    } else {
+        format!("{}  ·  {}  ·  {}", t.clade, t.age_label(), eco.tier.name())
+    };
     text_centered(
         &sub,
         cx,
         r.y + r.h * 0.415,
         fit_px(&sub, r.w * 0.9, px),
-        col,
+        if game.is_fossil(taxon) {
+            STONE_TEXT
+        } else {
+            col
+        },
     );
 
     let x = r.x + r.w * 0.07;

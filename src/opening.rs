@@ -159,26 +159,52 @@ fn draw_helix(
 }
 
 fn card_size() -> Vec2 {
-    let w = screen_width() * 0.26;
+    let w = screen_width() * 0.42;
     vec2(w, w * 1.4)
 }
 
-/// Where card `i` of `n` lands, face down.
-fn card_slot(i: usize, n: usize) -> Vec2 {
+/// Card `i` of the face-down stack: 0 on top, the best (last) at the bottom.
+fn stack_pos(i: usize) -> Vec2 {
+    let u = ui::u();
+    let depth = i.min(6) as f32;
+    vec2(screen_width() * 0.5, screen_height() * 0.5) + vec2(depth, depth) * u * 1.4
+}
+
+/// The summary grid: as many cards as the genome holds, no cap.
+fn grid_cols(n: usize) -> usize {
+    match n {
+        0..=3 => n.max(1),
+        4 => 2,
+        5..=9 => 3,
+        _ => 4,
+    }
+}
+
+fn grid_card_size(n: usize) -> Vec2 {
     let (sw, sh) = (screen_width(), screen_height());
-    let per_row = if n <= 3 { n } else { n.div_ceil(2) };
-    let row = i / per_row;
-    let in_row = if row == 0 {
-        per_row.min(n)
+    let cols = grid_cols(n) as f32;
+    let rows = n.div_ceil(grid_cols(n)).max(1) as f32;
+    let gap = sw * 0.03;
+    let w = ((sw * 0.92 - gap * (cols - 1.0)) / cols)
+        .min((sh * 0.6 - gap * (rows - 1.0)) / rows / 1.4)
+        .min(sw * 0.28);
+    vec2(w, w * 1.4)
+}
+
+fn grid_slot(i: usize, n: usize) -> Vec2 {
+    let (sw, sh) = (screen_width(), screen_height());
+    let cols = grid_cols(n);
+    let rows = n.div_ceil(cols).max(1);
+    let (row, col) = (i / cols, i % cols);
+    let in_row = if row + 1 == rows {
+        n - row * cols
     } else {
-        n - per_row
+        cols
     };
-    let col = i % per_row;
-    let cs = card_size();
-    let gap = sw * 0.04;
+    let cs = grid_card_size(n);
+    let gap = sw * 0.03;
     let total = in_row as f32 * cs.x + (in_row as f32 - 1.0) * gap;
     let x = (sw - total) * 0.5 + col as f32 * (cs.x + gap) + cs.x * 0.5;
-    let rows = if n <= 3 { 1 } else { 2 };
     let y = sh * 0.5 + (row as f32 - (rows as f32 - 1.0) * 0.5) * (cs.y + gap);
     vec2(x, y)
 }
@@ -240,7 +266,7 @@ impl Opening {
     }
 
     /// `results` must be `Some` when `wants_results()` was true (best last).
-    pub fn tap(&mut self, p: Vec2, results: Option<Vec<Opened>>) {
+    pub fn tap(&mut self, results: Option<Vec<Opened>>) {
         let u = ui::u();
         match self.stage {
             Stage::Sealed => {
@@ -277,48 +303,13 @@ impl Opening {
                     self.t = 0.0;
                 }
             }
-            Stage::Cards => {
-                let n = self.opened.len();
-                let cs = card_size();
-                for i in 0..n {
-                    let c = card_slot(i, n);
-                    let r = Rect::new(c.x - cs.x * 0.5, c.y - cs.y * 0.5, cs.x, cs.y);
-                    if !r.contains(p) || self.flipped[i] > 0.0 {
-                        continue;
-                    }
-                    // The best card (last) waits for the others.
-                    let others_done = self
-                        .flipped
-                        .iter()
-                        .enumerate()
-                        .all(|(j, &f)| j == i || f > 0.0);
-                    if i == n - 1 && !others_done {
-                        self.shake = 3.0 * u;
-                        return;
-                    }
-                    self.flipped[i] = 0.001;
-                    let col = tier_color(self.opened[i].card.tier);
-                    self.burst_particles(c, 24, 120.0 * u, &[col, WHITE], 0.0, u * 1.3);
-                    self.shake = (1.5 + self.opened[i].card.tier.index() as f32) * u;
-                    self.stage = Stage::Showcase(i);
-                    self.t = 0.0;
-                    return;
-                }
-                if self.flipped.iter().all(|&f| f > 0.0) {
-                    self.stage = Stage::Summary;
-                    self.t = 0.0;
-                }
-            }
+            Stage::Cards => self.reveal_next(),
             Stage::Showcase(i) => {
                 let full = if self.opened[i].card.new { 2.3 } else { 0.8 };
                 if self.t < full {
                     self.t = full;
                 } else {
-                    self.stage = Stage::Cards;
-                    self.t = 0.0;
-                    if self.flipped.iter().all(|&f| f > 0.0) {
-                        self.stage = Stage::Summary;
-                    }
+                    self.reveal_next();
                 }
             }
             Stage::Summary => {
@@ -326,6 +317,33 @@ impl Opening {
                     self.t = 100.0;
                 }
             }
+        }
+    }
+
+    /// Flips the top card of the stack into its showcase, or ends on the
+    /// summary once the stack is empty.
+    fn reveal_next(&mut self) {
+        let u = ui::u();
+        let Some(i) = self.flipped.iter().position(|&f| f <= 0.0) else {
+            self.stage = Stage::Summary;
+            self.t = 0.0;
+            return;
+        };
+        self.flipped[i] = 0.001;
+        let col = tier_color(self.opened[i].card.tier);
+        self.burst_particles(stack_pos(0), 24, 120.0 * u, &[col, WHITE], 0.0, u * 1.3);
+        self.shake = (1.5 + self.opened[i].card.tier.index() as f32) * u;
+        self.stage = Stage::Showcase(i);
+        self.t = 0.0;
+    }
+
+    /// "tap: next card (3 left)", or how to finish.
+    fn next_hint(&self) -> String {
+        let left = self.flipped.iter().filter(|&&f| f <= 0.0).count();
+        match left {
+            0 => "tap to finish".into(),
+            1 => "tap: the last card".into(),
+            k => format!("tap: next card  ({k} left)"),
         }
     }
 
@@ -403,7 +421,7 @@ impl Opening {
         match self.stage {
             Stage::Sealed => self.draw_sealed(assets, off, t),
             Stage::Burst => self.draw_burst(assets, off, t, tell),
-            Stage::Cards => self.draw_cards(game, sprites, assets, off, t),
+            Stage::Cards => self.draw_cards(assets, off, t),
             Stage::Showcase(i) => self.draw_showcase(game, sprites, assets, off, t, i),
             Stage::Summary => self.draw_summary(game, sprites, assets, off),
         }
@@ -642,12 +660,13 @@ impl Opening {
         text_centered(label, sw * 0.5, sh * 0.2, u * 14.0 * scale.max(1.0), tell);
         let n = self.opened.len();
         let cs = card_size();
-        for i in 0..n {
-            let local = ((b - 0.3 - i as f32 * 0.07) / 0.5).clamp(0.0, 1.0);
+        // Bottom of the stack first, so the top card lands last.
+        for i in (0..n).rev() {
+            let local = ((b - 0.3 - (n - 1 - i) as f32 * 0.07) / 0.5).clamp(0.0, 1.0);
             if local <= 0.0 {
                 continue;
             }
-            let p = c.lerp(card_slot(i, n), ease_out_back(local));
+            let p = c.lerp(stack_pos(i), ease_out_back(local));
             let tier = self.opened[i].card.tier;
             draw_card_back(assets, p + off, cs * (0.3 + 0.7 * local), tier, i);
         }
@@ -657,52 +676,39 @@ impl Opening {
         }
     }
 
-    fn draw_cards(&mut self, game: &Game, sprites: &Sprites, assets: &Assets, off: Vec2, t: f32) {
+    /// The face-down stack: tap anywhere to reveal the top card.
+    fn draw_cards(&mut self, assets: &Assets, off: Vec2, t: f32) {
         let u = ui::u();
         let (sw, sh) = (screen_width(), screen_height());
         let n = self.opened.len();
         let cs = card_size();
-        let best = self
-            .opened
-            .last()
-            .map(|o| o.card.tier)
-            .unwrap_or(Tier::Common);
+        let left: Vec<usize> = (0..n).filter(|&i| self.flipped[i] <= 0.0).collect();
         text_centered(
-            &format!("{n} CARDS  ·  TAP TO FLIP"),
+            &format!("{n} CARD{}", if n == 1 { "" } else { "S" }),
             sw * 0.5,
-            sh * 0.16,
-            u * 7.5,
+            sh * 0.13,
+            u * 10.0,
+            TEXT,
+        );
+        text_centered(
+            "the best one comes last",
+            sw * 0.5,
+            sh * 0.17,
+            u * 5.5,
             TEXT_DIM,
         );
-        for i in 0..n {
-            let c = card_slot(i, n) + off;
-            let bob = (t * 2.0 + i as f32).sin() * u * 1.2;
-            let pos = c + vec2(0.0, bob);
-            let f = self.flipped[i];
-            if f > 0.0 {
-                draw_card_face(game, sprites, assets, pos, cs, &self.opened[i], f);
-            } else {
-                draw_card_back(assets, pos, cs, self.opened[i].card.tier, i);
-                if i == n - 1 && n > 1 {
-                    text_centered(
-                        "BEST LAST",
-                        pos.x,
-                        pos.y + cs.y * 0.62,
-                        u * 5.0,
-                        tier_color(best),
-                    );
-                }
-            }
+        let bob = (t * 2.0).sin() * u * 1.2;
+        for (depth, &i) in left.iter().enumerate().rev() {
+            let pos = stack_pos(depth) + off + vec2(0.0, bob);
+            draw_card_back(assets, pos, cs, self.opened[i].card.tier, i);
         }
-        if self.flipped.iter().all(|&f| f >= 1.0) {
-            text_centered(
-                "tap to continue",
-                sw * 0.5,
-                sh * 0.86,
-                u * 6.0,
-                faded(TEXT, 0.7),
-            );
-        }
+        text_centered(
+            "tap to reveal",
+            sw * 0.5,
+            sh * 0.86,
+            u * 7.0,
+            faded(TEXT, 0.6 + 0.4 * (t * 3.0).sin()),
+        );
     }
 
     fn draw_showcase(
@@ -722,6 +728,20 @@ impl Opening {
         let tier = o.card.tier;
         let col = tier_color(tier);
         let c = vec2(sw * 0.5, sh * 0.36) + off;
+        let n = self.opened.len();
+        let counter = if i + 1 == n && n > 1 {
+            format!("CARD {} / {n}  ·  THE BEST", i + 1)
+        } else {
+            format!("CARD {} / {n}", i + 1)
+        };
+        text_centered(
+            &counter,
+            sw * 0.5,
+            sh * 0.055,
+            u * 6.0,
+            if i + 1 == n && n > 1 { col } else { TEXT_DIM },
+        );
+        let hint = self.next_hint();
 
         if !o.card.new {
             let k = ease_out_back((self.t / 0.35).min(1.0));
@@ -787,6 +807,9 @@ impl Opening {
                         rgb(0xFFC56B),
                     );
                 }
+            }
+            if self.t > 0.4 {
+                text_centered(&hint, sw * 0.5, sh * 0.95, u * 5.5, faded(TEXT_DIM, 0.8));
             }
             return;
         }
@@ -896,16 +919,10 @@ impl Opening {
                 TEXT,
             );
             text_centered(tier.name(), sw * 0.5, sh * 0.25, u * 7.5, col);
-            let d = format!("Keystone: {}", eco.bonus.describe());
+            let d = format!("Keystone: {}", eco.describe());
             text_centered(&d, sw * 0.5, sh * 0.86, fit_px(&d, sw * 0.9, u * 6.0), LIME);
             if self.t > reveal_at + 0.8 {
-                text_centered(
-                    "tap to continue",
-                    sw * 0.5,
-                    sh * 0.92,
-                    u * 5.5,
-                    faded(TEXT_DIM, 0.8),
-                );
+                text_centered(&hint, sw * 0.5, sh * 0.92, u * 5.5, faded(TEXT_DIM, 0.8));
             }
         }
     }
@@ -921,13 +938,13 @@ impl Opening {
             rgb(0xFFC56B),
         );
         let n = self.opened.len();
-        let cs = card_size();
+        let cs = grid_card_size(n);
         for i in 0..n {
             draw_card_face(
                 game,
                 sprites,
                 assets,
-                card_slot(i, n) + off,
+                grid_slot(i, n) + off,
                 cs,
                 &self.opened[i],
                 1.0,

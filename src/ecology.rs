@@ -191,8 +191,8 @@ pub enum Catch {
     Tyrant,
     /// Doubles all luck; Temperature can't go below Temperate.
     Apex,
-    /// +2 adjustment points; Vegetation can't go above Forest.
-    Farmer,
+    /// x2 luck and +2 cards; 1 genome in 5 ends the Earth instead.
+    Hubris,
     /// Morphs x3; one fewer boon to choose from.
     Feathers,
     /// Legendary pity 25; the wait is an hour longer.
@@ -206,7 +206,7 @@ impl Catch {
         match self {
             Catch::Tyrant => "+2 cards in every genome",
             Catch::Apex => "Doubles all Luck",
-            Catch::Farmer => "+2 adjustment points",
+            Catch::Hubris => "x2 Luck and +2 cards",
             Catch::Feathers => "Morphs x3",
             Catch::Ancient => "A Legendary within 25 genomes",
             Catch::Wildcard => "Counts as every team; more morphs",
@@ -217,7 +217,7 @@ impl Catch {
         match self {
             Catch::Tyrant => "Plant-eater keystones fall asleep",
             Catch::Apex => "Temperature can't go below Temperate",
-            Catch::Farmer => "Vegetation can't go above Forest",
+            Catch::Hubris => "1 genome in 5 ends the Earth",
             Catch::Feathers => "One fewer boon to choose from",
             Catch::Ancient => "The wait is an hour longer",
             Catch::Wildcard => "Can't be copied",
@@ -488,7 +488,7 @@ const TABLE: &[(&str, Needs, Tier, Bonus, Rule)] = &[
     ("Monkey",           fur(t(n(FOREST, 0), 3, 5)),          Rare,      B::Cards,           R::Flat),
     ("Ape",              fur(t(n(FOREST, 0), 3, 5)),          Epic,      B::Luck,            R::Flat),
     ("Chimpanzee",       b(Jungle, FOREST),              Epic,      B::Luck,            R::CopyBelowMammal),
-    ("Human",            b(Savanna, LAND),               Legendary, B::Point,           R::Catch(Catch::Farmer)),
+    ("Human",            b(Savanna, LAND),               Legendary, B::Luck,            R::Catch(Catch::Hubris)),
     ("Reptile",          t(n(LAND, 0), 3, 5),            Uncommon,  B::Share(Land),     R::Flat),
     ("Turtle",           t(n(SHORE, 0), 3, 5),           Uncommon,  B::DoubleSpecimens, R::Flat),
     ("Lizard",           v(t(n(LAND, 0), 3, 5), 0, 3),   Common,    B::Luck,            R::OnlyWhen(Cond::Bare)),

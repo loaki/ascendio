@@ -392,6 +392,9 @@ fn inside(p: Vec2, center: Vec2, half: Vec2) -> bool {
 }
 
 fn chip_label(game: &Game, taxon: usize) -> String {
+    if game.is_fossil(taxon) {
+        return game.taxon(taxon).name.to_string();
+    }
     if !game.unlocked[taxon] {
         return "???".to_string();
     }

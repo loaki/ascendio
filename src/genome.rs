@@ -111,7 +111,6 @@ const EPIC_PITY: u32 = 10;
 pub const LEGENDARY_PITY: u32 = 40;
 /// A fresh player's first morph arrives within this many genomes.
 const FIRST_MORPH_PITY: u32 = 14;
-pub const MAX_CARDS: usize = 6;
 
 /// Everything that bends the odds for one genome: keystones + the chosen boon.
 #[derive(Clone, Debug)]
@@ -138,6 +137,8 @@ pub struct Odds {
     pub after_new_morph: f32,
     /// Legendary pity steps added when a genome holds nothing new.
     pub no_new_pity: u32,
+    /// Radiation's morph multiplier, applied past the usual cap.
+    pub morph_rad: f32,
 }
 
 impl Default for Odds {
@@ -155,6 +156,7 @@ impl Default for Odds {
             after_rare_luck: 0.0,
             after_new_morph: 0.0,
             no_new_pity: 0,
+            morph_rad: 1.0,
         }
     }
 }
@@ -192,7 +194,8 @@ pub fn blocked_hint(phy: &Phylogeny, found: &[bool], planet: &Planet) -> Option<
 
 /// Percent chance of each tier, Common first, after `luck`.
 pub fn tier_weights(luck: f32) -> [f32; 5] {
-    let luck = luck.clamp(0.0, 15.0);
+    // Past 15 only radiation pushes; Common never drops below 10%.
+    let luck = luck.clamp(0.0, 50.0);
     let rare_total = 11.0 + 3.5 + 0.5;
     [
         60.0 - luck,
@@ -295,7 +298,7 @@ fn roll_morph(
     extra: f32,
     rng: &mut Rng,
 ) -> Morph {
-    let m = (odds.morph_mult + extra).clamp(0.0, MORPH_MULT_MAX);
+    let m = (odds.morph_mult + extra).clamp(0.0, MORPH_MULT_MAX) * odds.morph_rad;
     let arthropod = phy.taxa.iter().position(|t| t.name == "Arthropod");
     let giant_boost = if planet.oxygen >= 5 && arthropod.is_some_and(|a| is_under(phy, taxon, a)) {
         3.0
@@ -340,7 +343,7 @@ pub fn roll(
     rng: &mut Rng,
 ) -> Vec<Card> {
     let mut seen = found.to_vec();
-    let count = odds.cards.clamp(1, MAX_CARDS);
+    let count = odds.cards.max(1);
     let mut cards = Vec::with_capacity(count);
 
     for k in 0..count {
@@ -681,7 +684,8 @@ mod tests {
         let w = tier_weights(100.0);
         assert!(w[0] < w0[0] && w[4] > w0[4]);
         assert!((w.iter().sum::<f32>() - 100.0).abs() < 1e-3);
-        assert_eq!(w, tier_weights(15.0));
+        assert_eq!(w, tier_weights(50.0), "radiation's ceiling");
+        assert!(w[0] >= 10.0, "Common never vanishes");
     }
 
     #[test]

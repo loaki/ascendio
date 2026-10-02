@@ -35,15 +35,18 @@ how to run it.
 3. **Evolve the genome** (`src/opening.rs`). A 3D double helix gives no
    hint of what's inside. Each of three taps mutates a third of its base
    pairs; the third collapses it into a core that detonates like a supernova
-   in the best card's colour, and the cards fly out face down. Flip them in any order; the best one is locked until
-   last. A new species gets a full reveal (silhouette, clues, then colour),
+   in the best card's colour, and the cards land in a face-down stack: each
+   tap reveals the next one, the best last. A new species gets a full reveal (silhouette, clues, then colour),
    and a duplicate becomes a specimen that levels its animal up.
 4. **Steer.** Pick 1 of 3 boons for the next cycle (Lure a clade, +1 card, a
    guaranteed Rare, x4 morphs, less wait, +2 points), and equip up to 3
    discovered animals as **keystones**. Each has a bonus and a rule (grows
    while the reef is warm, x2 in the cold, copies its neighbour, a legendary
    perk with a catch...), and works only while the planet suits it: an
-   unsuited one is asleep. A morph changes what it does (Amber x2, Albino
+   unsuited one is asleep. Human doubles Luck and adds 2 cards, but 1 genome
+   in 5 ends the Earth (`src/collapse.rs`): a new Earth starts from the
+   Urmetazoan with +1 RAD (rarer cards, more morphs), and everything found
+   stays as a fossil to find again. A morph changes what it does (Amber x2, Albino
    x1.5 but sunburns, Melanistic lives colder, Giant x1.25).
 
 What a genome can hold is filtered twice (`src/genome.rs`): the tree
@@ -123,8 +126,11 @@ ASCENDIO_TIME_SCALE=3600 cargo run --release
 ASCENDIO_DEV=1 cargo run --release
 
 # Write a PNG of the framebuffer after N seconds and exit, without touching
-# the real save. ASCENDIO_SHOT_MODE=map|spiral|dial|keystones|settings|biomes picks the screen.
+# the real save. ASCENDIO_SHOT_MODE=map|spiral|dial|keystones|settings|biomes|collapse|backdrop picks the screen.
 ASCENDIO_SCRATCH=1 ASCENDIO_SHOT=shot.png ASCENDIO_SHOT_AFTER=2 cargo run --release
+
+# ASCENDIO_SHOT_EVERY=0.0833 also writes every frame (out_000.png, ...) at
+# that fixed step, for recording animations.
 
 # Start on a ready genome and tap the opening N times (0.5 s apart), for
 # capturing its stages.
@@ -263,6 +269,7 @@ src/
 ├── ecology.rs   every taxon's habitat, needs, rarity tier and keystone bonus
 ├── genome.rs    what a genome can hold: eligibility, tiers, pity, morphs
 ├── opening.rs   the genome's mutate-and-supernova opening (the "pack opening")
+├── collapse.rs  the end of the Earth when Human's gamble is lost
 ├── genome_bg.rs the abyss and supernova light behind the opening
 ├── backdrop.rs  the pixel-art planet cross-section behind the spiral
 ├── pixel.rs     the dithered low-res canvas both backdrops paint into

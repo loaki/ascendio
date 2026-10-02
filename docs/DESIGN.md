@@ -67,7 +67,7 @@ two 3h ones:
 Half hours in between are interpolated; a fraction is the chance of one
 more card. **Points next** are the adjustment points the next shaping gets
 (before keystones and boons): a long wait buys a big reshape, a short one a
-small tweak. The first shaping and the ones after the tutorial cycles get 3. Keystone bonuses stack on top (6 cards at most). The tutorial
+small tweak. The first shaping and the ones after the tutorial cycles get 3. Keystone bonuses stack on top, with no cap on cards. The tutorial
 cycles pay like a 3h wait, but with 3 cards so the first genomes fill
 the tree.
 
@@ -175,8 +175,9 @@ a glowing 3D double helix, and expressing it is the "pack opening"
    shockwaves, speed lines and a storm of base pairs, all in the **best card's
    colour**: the first time the rarity shows. The cards are
    thrown out of the blast.
-4. **Cards face down.** Each glows its tier colour, and you tap them in any
-   order. The best card is always forced to go last.
+4. **A face-down stack.** The cards land in one stack ("7 CARDS"). Each
+   tap reveals the top card full screen ("CARD 3 / 7") and the next tap
+   passes to the following one. The best card is always last.
 5. **Staged reveal for a new species.** Silhouette, then habitat, clade and
    origin typed out, then the animal bursts into colour.
 6. **First-ever discovery** gets the full animation; a duplicate is a quick
@@ -219,7 +220,7 @@ A pity roll only fires when an eligible taxon of that tier exists. The
 counter keeps waiting otherwise.
 
 Cards per genome come from the wait (see Pacing), + keystone and boon
-bonuses, up to 6.
+bonuses, with no cap.
 
 ### Morphs: the second rarity axis
 
@@ -254,6 +255,47 @@ A duplicate is never wasted. It levels that animal from **Lv 1 to Lv 5**
 The cycle after a Great Dying, every card is **Rare or better**, drawn
 from the survivors' children. It's the payoff for choosing to wreck your
 own planet.
+
+### The end of the Earth (Human)
+
+Human is the gamble: x2 Luck and +2 cards, but when a genome rolled with
+Human opens, **1 time in 5 the Earth ends** instead. The roll is made with
+the genome, when the wait ends, and saved with it, so reopening the app
+can't change it. While it waits, the genome panel and the EVOLVE IT button
+show the risk ("20% the Earth ends").
+
+Tapping EVOLVE IT then plays the end of the Earth (`src/collapse.rs`,
+about 9 s, a tap skips to the end) instead of the cards, and the genome is
+lost:
+
+1. **The roll.** Red flashes, "1 IN 5".
+2. **The flash.** The screen goes solid white, then the white dithers
+   away to reveal the Earth frozen into a snowball.
+3. **Snow and ash.** Snow and ash fall on the frozen world as it dims:
+   "everything found turns to stone".
+4. **The spiral unwinds.** The screen goes black and the coil spins down
+   to its one node.
+5. **New Earth.** The game restarts from the Urmetazoan with **+1 RAD**.
+   There is no choice to make: the radiation is the reward.
+
+**What resets:** the spiral (back to step 0), Ma and era, the planet,
+keystones and their charges, pity, the waiting genome, the points budget.
+
+**What stays:** every animal ever found, as a **fossil** with its
+specimens (so its level) and morphs. Fossils show as grey stone with their
+name on the spiral, the map and the Keystones grid, so you know what you
+are hunting. A fossil must be found again before it can be a keystone;
+then it comes back at its old level.
+
+**RAD** shows as a badge in the top bar (tap it for the details) and
+stacks each time Human ends an Earth. Each RAD gives **+5 Luck past the
+usual 15 cap** and **+50% morph chance** past the usual x6 cap:
+
+| Per card, no keystones | Earth 1 | 1 RAD | 2 RAD | 3 RAD |
+|---|---|---|---|---|
+| Rare or better | 15% | 20% | 25% | 30% |
+| Legendary | 0.5% | 0.67% | 0.83% | 1% |
+| Morph | 8.3% | 12.5% | 16.6% | 20.8% |
 
 ## Steering what you discover
 
@@ -307,7 +349,7 @@ Legendary 6) × level × morph:
 |---|---|---|
 | T. rex | +2 cards | Plant-eater keystones fall asleep |
 | Megalodon | Doubles all Luck | Temperature can't go below Temperate |
-| Human | +2 adjustment points | Vegetation can't go above Forest |
+| Human | x2 Luck and +2 cards | 1 genome in 5 ends the Earth (see below) |
 | Archaeopteryx | Morphs ×3 | One fewer boon to choose from |
 | Tuatara | A Legendary within 25 genomes | The wait is an hour longer |
 | Platypus | Counts as every team; more morphs | Can't be copied |
@@ -396,7 +438,7 @@ habitat: L = Land, V = Vegetation, O = Oxygen, T = Temperature.
 | 58 | Monkey | Forest | O≤4, 3≤T≤4 | R | Chance of +1 card |
 | 59 | Ape | Forest | O≤4, 3≤T≤4 | E | Better rarity odds |
 | 60 | Chimpanzee | Forest | Jungle | E | Copies the keystone below it, if a mammal |
-| 61 | Human | Land | Savanna | L | +2 adjustment points; but vegetation can't go above forest |
+| 61 | Human | Land | Savanna | L | x2 Luck and +2 cards; but 1 genome in 5 ends the earth |
 | 62 | Reptile | Land | T≥3 | U | More land finds |
 | 63 | Turtle | Shore | T≥3 | U | Duplicates count double |
 | 64 | Lizard | Land | V≤3, T≥3 | C | Better rarity odds, only on bare ground |
