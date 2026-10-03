@@ -71,19 +71,23 @@ impl Boon {
         }
     }
 
-    pub fn describe(self, phy: &Phylogeny) -> String {
+    /// What it does, for the boon pick (right after a wait).
+    pub fn describe(self, game: &Game) -> String {
         match self {
-            Boon::Lure(t) => format!("{} x3 odds", phy.taxa[t].clade),
-            Boon::Lens => "+1 card in the next genome".into(),
-            Boon::Catalyst => "A guaranteed Rare or better".into(),
+            Boon::Lure(t) => format!("{} x3 odds", game.phy.taxa[t].clade),
+            Boon::Lens => "+50% cards in the next genome".into(),
+            Boon::Catalyst => "A sure Rare, or a sure Epic on a 6h wait".into(),
             Boon::Charm => "x4 morph chance".into(),
-            Boon::Tailwind => "1 hour less to wait".into(),
-            Boon::Tectonics => "+2 adjustment points".into(),
+            Boon::Tailwind => "25% less to wait".into(),
+            Boon::Tectonics => {
+                let n = game.tectonics_points();
+                format!("+{n} adjustment point{}", plural(n.into()))
+            }
         }
     }
 }
 
-/// The chance a genome opened with Human ends the Earth.
+/// The chance a 4h wait with Human ends the Earth (it compounds per hour).
 pub const DOOM_CHANCE: f32 = 0.2;
 /// Per RAD: luck past the cap, and morph chance added (x1.5, x2, ...).
 pub const RAD_LUCK: f32 = 5.0;
@@ -92,8 +96,17 @@ pub const RAD_MORPH: f32 = 0.5;
 /// `Game::edition`: the player chose this morph rather than the best one.
 const PICKED: u8 = 0x80;
 
+/// Ma of growth per charge of a growing keystone (Coral, Bee...): a charge
+/// per default 4h wait, so short waits grow no faster than long ones.
+pub const CHARGE_MA: u16 = 40;
 /// Most charges a growing keystone holds.
-const MAX_CHARGES: u8 = 10;
+const MAX_GROWTH: u16 = 10 * CHARGE_MA;
+/// Tailwind's cut of the wait.
+const TAILWIND: f64 = 0.25;
+/// Lens: this much more cards.
+const LENS: f32 = 1.5;
+/// Tectonics' points for a default 4h wait, scaled with the wait just run.
+const TECTONICS_POINTS: f32 = 2.0;
 /// Starfish charges: each a third of a card.
 const MAX_DUPLICATE_CHARGES: u8 = 3;
 
@@ -193,21 +206,21 @@ impl Gain {
             Gain::Morph(x) => format!("+{:.0}% morphs", x * 100.0),
             Gain::MorphMult(x) => format!("x{x:.0} morphs"),
             Gain::Quick(x) => format!("-{:.0}% wait", x * 100.0),
-            Gain::Points(n) => format!("+{n} point{}", if n == 1 { "" } else { "s" }),
+            Gain::Points(n) => format!("+{n} point{} per 4h", plural(n)),
             Gain::Soil(n) => format!("+{n} vegetation"),
             Gain::DoubleSpecimens => "x2 duplicates".into(),
             Gain::Share(h, x) => format!("x{:.1} {}", 1.0 + x, h.name().to_lowercase()),
-            Gain::Pity(n) => format!("Legendary in {n}"),
-            Gain::MorphWindow(n) => format!("morph every {n}"),
+            Gain::Pity(n) => format!("Legendary within {n} Ma"),
+            Gain::MorphWindow(n) => format!("morph every {n} Ma"),
             Gain::Giant(x) => format!("x{x:.0} giants"),
             Gain::AfterRare(x) => format!("+{x:.1} Luck after a Rare"),
             Gain::AfterNew(x) => format!("+{:.0}% morphs after new", x * 100.0),
             Gain::Feed => "feeds keystones".into(),
-            Gain::NoNewPity(n) => format!("pity +{n} if nothing new"),
+            Gain::NoNewPity(n) => format!("pity +{n} Ma if nothing new"),
             Gain::FewerBoons => "-1 boon".into(),
             Gain::LongerWait(s) => format!("+{:.0}h wait", s / 3600.0),
             Gain::TempMin(_) => "Temperature locked".into(),
-            Gain::Doom(p) => format!("{:.0}% the Earth ends", p * 100.0),
+            Gain::Doom(p) => format!("{:.0}% per 4h the Earth ends", p * 100.0),
         }
     }
 }
@@ -255,6 +268,9 @@ struct SaveHeader {
     /// Absent before the wait could be chosen: every cycle was 20 Ma.
     #[serde(default)]
     ma_done: Option<u32>,
+    /// Absent before keystone points were earned by waiting.
+    #[serde(default)]
+    bonus_points: Option<u8>,
 }
 
 /// The game as saved: its own fields plus the format version.
@@ -301,9 +317,12 @@ pub struct Game {
     pub keystones: Vec<usize>,
     pub boon: Option<Boon>,
     pub boon_offer: Option<Vec<Boon>>,
-    /// Charges per taxon: cycles grown, or duplicates for the Starfish.
+    /// Duplicates charged per taxon, for the Starfish.
     #[serde(default)]
     pub charges: Vec<u8>,
+    /// Ma a growing keystone has grown (a charge per `CHARGE_MA`).
+    #[serde(default)]
+    pub growth: Vec<u16>,
     /// Cycles a fragile keystone has run.
     #[serde(default)]
     pub held: Vec<u8>,
@@ -321,6 +340,15 @@ pub struct Game {
     /// Adjustment points the last wait gave this shaping, before keystones.
     #[serde(default = "default_points")]
     pub wait_points: u8,
+    /// Points the keystones earned during the last wait (`Gain::Points`
+    /// per 4h), and the fraction carried to the next.
+    #[serde(default)]
+    pub bonus_points: u8,
+    #[serde(default)]
+    pub point_carry: f32,
+    /// The wait just run, in hours: what Tectonics scales with.
+    #[serde(default = "default_wait")]
+    pub last_hours: f32,
     /// Earths Human has ended: each one boosts rarity and morphs.
     #[serde(default)]
     pub rad: u32,
@@ -369,11 +397,15 @@ impl Game {
             boon: None,
             boon_offer: None,
             charges: vec![0; n],
+            growth: vec![0; n],
             held: vec![0; n],
             gone: vec![false; n],
             edition: vec![0; n],
             last_launched: None,
             wait_points: planet::BASE_POINTS,
+            bonus_points: 0,
+            point_carry: 0.0,
+            last_hours: wait::DEFAULT_HOURS,
             rad: 0,
             fossil: vec![false; n],
             doomed: false,
@@ -407,6 +439,8 @@ impl Game {
         let mut game: Self = serde_json::from_str(json).ok()?;
         let n = game.phy.len();
         let saved = game.unlocked.len();
+        // Growing keystones counted charges per wait before growth by Ma.
+        let charges_were_growth = game.growth.is_empty();
         if header.version != SAVE_VERSION
             || saved > n
             || game.specimens.len() != saved
@@ -423,6 +457,7 @@ impl Game {
         game.morphs.resize(n, 0);
         game.found_ma.resize(n, None);
         game.charges.resize(n, 0);
+        game.growth.resize(n, 0);
         game.held.resize(n, 0);
         game.gone.resize(n, false);
         game.edition.resize(n, 0);
@@ -433,7 +468,20 @@ impl Game {
         game.level = vec![0; n];
         game.ma_done = header.ma_done.unwrap_or(game.cycles_done * 20);
         game.wait_hours = wait::snap(game.wait_hours);
+        game.pity.migrate();
+        if charges_were_growth {
+            for t in 0..n {
+                if matches!(game.phy.taxa[t].eco.rule, Rule::Grows(_) | Rule::Stasis) {
+                    game.growth[t] = u16::from(game.charges[t]) * CHARGE_MA;
+                    game.charges[t] = 0;
+                }
+            }
+        }
         game.refresh_levels();
+        // Keystone points used to count at once: this shaping keeps them.
+        if header.bonus_points.is_none() {
+            game.bonus_points = game.effects().points.min(MAX_POINTS.into()) as u8;
+        }
         game.tick(now);
         Some(game)
     }
@@ -682,8 +730,11 @@ impl Game {
             Bonus::Soil => vec![Gain::Soil(1)],
             Bonus::DoubleSpecimens => vec![Gain::DoubleSpecimens],
             Bonus::Share(h) => vec![Gain::Share(h, AFFINITY_PER_UNIT * amount)],
-            Bonus::LivingFossil => vec![Gain::Luck(amount), Gain::Pity(30)],
-            Bonus::Oddity => vec![Gain::Morph(MORPH_PER_UNIT * amount), Gain::MorphWindow(7)],
+            Bonus::LivingFossil => vec![Gain::Luck(amount), Gain::Pity(30 * genome::GENOME_MA)],
+            Bonus::Oddity => vec![
+                Gain::Morph(MORPH_PER_UNIT * amount),
+                Gain::MorphWindow(7 * genome::GENOME_MA),
+            ],
         }
     }
 
@@ -708,6 +759,7 @@ impl Game {
                 let mult = self.edition(k).strength();
                 let base = |amount: f32| Self::bonus_gains(eco.bonus, amount);
                 let charges = self.charges[k];
+                let grown = f32::from(self.growth[k]) / f32::from(CHARGE_MA);
                 let others = ks.iter().filter(|&&o| o != k);
                 let mut status = Status::Active;
                 let mut note = None;
@@ -723,8 +775,14 @@ impl Game {
                         }
                     }
                     Rule::Grows(_) | Rule::Stasis => {
-                        note = Some(format!("{charges} charge{}", plural(charges as u32)));
-                        base(0.5 * s * charges as f32)
+                        let count = if grown.fract() == 0.0 {
+                            format!("{grown:.0}")
+                        } else {
+                            format!("{grown:.1}")
+                        };
+                        let one = (grown - 1.0).abs() < f32::EPSILON;
+                        note = Some(format!("{count} charge{}", if one { "" } else { "s" }));
+                        base(0.5 * s * grown)
                     }
                     Rule::PerTeam(team) => {
                         let n = others.filter(|&&o| self.in_team(o, team)).count();
@@ -764,7 +822,7 @@ impl Game {
                     Rule::AfterRare => vec![Gain::AfterRare(s)],
                     Rule::AfterNew => vec![Gain::AfterNew(0.15 * s)],
                     Rule::Feed => vec![Gain::Feed],
-                    Rule::NoNewPity => vec![Gain::NoNewPity(2)],
+                    Rule::NoNewPity => vec![Gain::NoNewPity(2 * genome::GENOME_MA)],
                     Rule::GiantWhen(c) => {
                         if c.holds(&p) {
                             vec![Gain::Giant(3.0)]
@@ -782,7 +840,9 @@ impl Game {
                             Gain::Doom(DOOM_CHANCE),
                         ],
                         Catch::Feathers => vec![Gain::MorphMult(3.0), Gain::FewerBoons],
-                        Catch::Ancient => vec![Gain::Pity(25), Gain::LongerWait(3600.0)],
+                        Catch::Ancient => {
+                            vec![Gain::Pity(25 * genome::GENOME_MA), Gain::LongerWait(3600.0)]
+                        }
                         Catch::Wildcard => base(s),
                     },
                 };
@@ -889,10 +949,8 @@ impl Game {
         e.luck = (e.luck * luck_mult).min(15.0);
         e.morph = e.morph.min(2.0);
         e.quick = e.quick.min(0.3);
-        match self.boon {
-            Some(Boon::Lens) => e.extra_card += 1.0,
-            Some(Boon::Charm) => e.morph_mult_boon = 4.0,
-            _ => {}
+        if self.boon == Some(Boon::Charm) {
+            e.morph_mult_boon = 4.0;
         }
         e
     }
@@ -918,7 +976,7 @@ impl Game {
 
     /// Advances the charges and fragile timers of the keystones a finished
     /// wait ran with, on the planet it ran on.
-    fn advance_keystones(&mut self, launched: Planet) {
+    fn advance_keystones(&mut self, launched: Planet, ma: u32) {
         for k in self.active_keystones() {
             let rule = self.phy.taxa[k].eco.rule;
             let awake = self.dormant_reason(k).is_none();
@@ -929,9 +987,10 @@ impl Game {
             };
             match grow {
                 Some(true) if awake => {
-                    self.charges[k] = (self.charges[k] + 1).min(MAX_CHARGES);
+                    let ma = u16::try_from(ma).unwrap_or(MAX_GROWTH);
+                    self.growth[k] = self.growth[k].saturating_add(ma).min(MAX_GROWTH);
                 }
-                Some(_) => self.charges[k] = 0,
+                Some(_) => self.growth[k] = 0,
                 None => {}
             }
             if let Rule::Fragile(n) = rule {
@@ -948,14 +1007,28 @@ impl Game {
         self.last_launched = Some(launched);
     }
 
+    /// This shaping's budget: what the last wait gave, what the keystones
+    /// earned during it, and Tectonics.
     pub fn max_points(&self) -> u8 {
-        let e = self.effects();
         let tectonics = if self.boon == Some(Boon::Tectonics) {
-            2
+            self.tectonics_points()
         } else {
             0
         };
-        (self.wait_points + e.points as u8 + tectonics).min(MAX_POINTS)
+        (self.wait_points + self.bonus_points + tectonics).min(MAX_POINTS)
+    }
+
+    /// What Tectonics gives after the last wait: 2 for a 4h one.
+    pub fn tectonics_points(&self) -> u8 {
+        (TECTONICS_POINTS * self.last_hours / wait::DEFAULT_HOURS).round() as u8
+    }
+
+    /// The keystones' points for a wait of `hours`: 1 per 4h per point, the
+    /// fraction carried to the next wait.
+    fn earn_keystone_points(&mut self, hours: f32) {
+        let earned = self.effects().points as f32 * hours / wait::DEFAULT_HOURS + self.point_carry;
+        self.bonus_points = (earned.floor() as u8).min(MAX_POINTS);
+        self.point_carry = earned.fract();
     }
 
     fn cost(&self, p: &Planet) -> u8 {
@@ -1043,7 +1116,10 @@ impl Game {
         for (a, add) in affinity.iter_mut().zip(e.affinity) {
             *a += add;
         }
-        let cards = w.cards + e.extra_card;
+        let mut cards = w.cards + e.extra_card;
+        if self.boon == Some(Boon::Lens) {
+            cards *= LENS;
+        }
         Forecast {
             cards,
             ma: wait::ma(hours),
@@ -1061,13 +1137,17 @@ impl Game {
                     Some(Boon::Lure(t)) => Some(t),
                     _ => None,
                 },
+                // Catalyst lifts the sure card a step: Rare, or Epic on a
+                // wait that already guarantees a Rare.
                 catalyst: self.boon == Some(Boon::Catalyst) || w.sure_rare,
+                sure_epic: self.boon == Some(Boon::Catalyst) && w.sure_rare,
                 legendary_pity: e.legendary_pity,
                 morph_window: e.morph_window,
                 giant_mult: e.giant,
                 after_rare_luck: e.after_rare_luck,
                 after_new_morph: e.after_new_morph,
                 no_new_pity: e.no_new_pity,
+                ma: wait::ma(hours),
                 morph_rad: 1.0 + RAD_MORPH * self.rad as f32,
             },
         }
@@ -1078,7 +1158,7 @@ impl Game {
         let base =
             planet::cycle_seconds(self.cycles_done, self.next_hours(), e.quick) + e.longer_wait;
         if self.boon == Some(Boon::Tailwind) {
-            (base - 3600.0).max(base * 0.5)
+            base * (1.0 - TAILWIND)
         } else {
             base
         }
@@ -1134,10 +1214,15 @@ impl Game {
         );
         self.genome = Some(rolled);
         // Decided with the genome, so reopening the app can't reroll it.
-        let doom = self.effects().doom;
+        // The chance is per 4h and compounds, so splitting a wait into
+        // shorter ones never rolls it more often.
+        let per_4h = self.effects().doom;
+        let doom = 1.0 - (1.0 - per_4h).powf(cycle.hours / wait::DEFAULT_HOURS);
         self.doom_risk = doom;
         self.doomed = doom > 0.0 && self.rng.chance(doom);
-        self.advance_keystones(cycle.launched);
+        self.earn_keystone_points(cycle.hours);
+        self.last_hours = cycle.hours;
+        self.advance_keystones(cycle.launched, cycle.ma);
         // The tutorial cycles keep the starting budget.
         self.wait_points = if self.wait_choosable() {
             wait::points(cycle.hours)
@@ -1325,10 +1410,14 @@ impl Game {
         self.boon = None;
         self.boon_offer = None;
         self.charges = vec![0; n];
+        self.growth = vec![0; n];
         self.held = vec![0; n];
         self.gone = vec![false; n];
         self.last_launched = None;
         self.wait_points = planet::BASE_POINTS;
+        self.bonus_points = 0;
+        self.point_carry = 0.0;
+        self.last_hours = wait::DEFAULT_HOURS;
         self.refresh_levels();
     }
 
@@ -1573,10 +1662,11 @@ mod tests {
     }
 
     #[test]
-    fn a_point_keystone_raises_the_budget() {
+    fn a_point_keystone_earns_a_point_per_4h_waited() {
         let mut g = Game::new(0.0);
-        let ant = equip(&mut g, "Bear");
-        assert!(g.dormant_reason(ant).is_some(), "no forest on a sea world");
+        let bear = equip(&mut g, "Bear");
+        assert!(g.dormant_reason(bear).is_some(), "no forest on a sea world");
+        g.earn_keystone_points(4.0);
         assert_eq!(
             g.max_points(),
             planet::BASE_POINTS,
@@ -1589,8 +1679,33 @@ mod tests {
             temperature: 1,
             volcanism: 0,
         };
-        assert_eq!(g.dormant_reason(ant), None);
+        assert_eq!(g.dormant_reason(bear), None);
+        assert_eq!(g.max_points(), planet::BASE_POINTS, "earned by waiting");
+        g.earn_keystone_points(4.0);
         assert_eq!(g.max_points(), planet::BASE_POINTS + 1);
+    }
+
+    #[test]
+    fn short_waits_earn_keystone_points_no_faster_than_long_ones() {
+        let mut g = Game::new(0.0);
+        g.planet = Planet {
+            land: 3,
+            vegetation: 3,
+            oxygen: 3,
+            temperature: 1,
+            volcanism: 0,
+        };
+        equip(&mut g, "Bear");
+        let mut short = 0;
+        for _ in 0..3 {
+            g.earn_keystone_points(2.0);
+            short += g.bonus_points;
+        }
+        g.point_carry = 0.0;
+        g.earn_keystone_points(6.0);
+        // 3 x 2h: 0 + 1 + 0 (the halves carry over); 6h: 1 and a half carried.
+        assert_eq!((short, g.bonus_points), (1, 1));
+        assert_eq!(g.point_carry, 0.5);
     }
 
     #[test]
@@ -1653,14 +1768,44 @@ mod tests {
     }
 
     #[test]
-    fn tailwind_shortens_the_wait_but_never_below_half() {
+    fn tailwind_takes_a_quarter_off_any_wait() {
         let mut g = Game::new(0.0);
         g.cycles_done = 5;
-        g.set_wait(6.0);
         g.boon = Some(Boon::Tailwind);
-        assert_eq!(g.next_cycle_seconds(), 6.0 * 3600.0 - 3600.0);
+        for hours in [2.0, 6.0] {
+            g.set_wait(hours);
+            assert_eq!(g.next_cycle_seconds(), hours as f64 * 3600.0 * 0.75);
+        }
         g.cycles_done = 0;
-        assert_eq!(g.next_cycle_seconds(), 30.0);
+        assert_eq!(g.next_cycle_seconds(), 45.0);
+    }
+
+    #[test]
+    fn lens_and_catalyst_scale_with_the_wait() {
+        let mut g = Game::new(0.0);
+        g.cycles_done = planet::TUTORIAL_CYCLES;
+        g.set_wait(4.0);
+        let plain = g.forecast().cards;
+        g.boon = Some(Boon::Lens);
+        assert_eq!(g.forecast().cards, plain * 1.5);
+        g.boon = Some(Boon::Catalyst);
+        g.set_wait(2.0);
+        let short = g.forecast().odds;
+        assert!(short.catalyst && !short.sure_epic, "a sure Rare");
+        g.set_wait(6.0);
+        assert!(
+            g.forecast().odds.sure_epic,
+            "a 6h wait already has its Rare"
+        );
+    }
+
+    #[test]
+    fn tectonics_scales_with_the_wait_just_run() {
+        let mut g = Game::new(0.0);
+        for (hours, points) in [(2.0, 1), (4.0, 2), (6.0, 3)] {
+            g.last_hours = hours;
+            assert_eq!(g.tectonics_points(), points, "{hours}h");
+        }
     }
 
     #[test]
@@ -1725,7 +1870,7 @@ mod tests {
 
     /// Every field the save gained after its format was fixed (they all
     /// have a default): a save from the earliest release has none of them.
-    const ADDED_SINCE: [&str; 13] = [
+    const ADDED_SINCE: [&str; 17] = [
         "ma_done",
         "wait_hours",
         "charges",
@@ -1739,6 +1884,10 @@ mod tests {
         "doomed",
         "doom_risk",
         "last_found",
+        "growth",
+        "bonus_points",
+        "point_carry",
+        "last_hours",
     ];
 
     #[test]
@@ -1839,15 +1988,56 @@ mod tests {
         g.planet = REEF;
         let coral = equip(&mut g, "Coral");
         assert_eq!(luck(&report(&g, coral)), 0.0);
-        g.advance_keystones(REEF);
-        g.advance_keystones(REEF);
-        assert_eq!(g.charges[coral], 2);
+        g.advance_keystones(REEF, genome::GENOME_MA);
+        g.advance_keystones(REEF, genome::GENOME_MA);
+        assert_eq!(g.growth[coral], 2 * CHARGE_MA);
         assert!(luck(&report(&g, coral)) > 0.0);
-        g.advance_keystones(Planet {
-            temperature: 1,
-            ..REEF
-        });
-        assert_eq!(g.charges[coral], 0, "bleached");
+        g.advance_keystones(
+            Planet {
+                temperature: 1,
+                ..REEF
+            },
+            genome::GENOME_MA,
+        );
+        assert_eq!(g.growth[coral], 0, "bleached");
+    }
+
+    #[test]
+    fn charges_grow_with_the_time_waited_not_the_waits() {
+        let mut g = Game::new(0.0);
+        g.planet = REEF;
+        let coral = equip(&mut g, "Coral");
+        for _ in 0..3 {
+            g.advance_keystones(REEF, 20);
+        }
+        let short = g.growth[coral];
+        g.growth[coral] = 0;
+        g.advance_keystones(REEF, 60);
+        assert_eq!((short, g.growth[coral]), (60, 60));
+        assert_eq!(report(&g, coral).note.as_deref(), Some("1.5 charges"));
+    }
+
+    #[test]
+    fn an_old_save_keeps_its_charges_and_this_shapings_points() {
+        let mut g = Game::new(0.0);
+        g.planet = REEF;
+        let coral = equip(&mut g, "Coral");
+        g.morphs[coral] = Morph::Giant.bit();
+        let mut v: serde_json::Value = serde_json::from_str(&g.to_json()).unwrap();
+        let o = v.as_object_mut().unwrap();
+        for key in ["growth", "bonus_points", "point_carry", "last_hours"] {
+            o.remove(key);
+        }
+        // Coral had 3 charges, counted per wait.
+        o["charges"][coral] = 3.into();
+        let back = Game::from_json(&v.to_string(), 0.0).unwrap();
+        assert_eq!(back.growth[coral], 3 * CHARGE_MA);
+        assert_eq!(back.charges[coral], 0);
+        assert_eq!(
+            back.max_points(),
+            planet::BASE_POINTS + 1,
+            "the giant's point"
+        );
     }
 
     #[test]
@@ -1855,13 +2045,13 @@ mod tests {
         let mut g = Game::new(0.0);
         g.planet = REEF;
         let coral = equip(&mut g, "Coral");
-        g.charges[coral] = 4;
+        g.growth[coral] = 4 * CHARGE_MA;
         let plain = luck(&report(&g, coral));
         g.morphs[coral] = Morph::Amber.bit();
         assert_eq!(luck(&report(&g, coral)), plain * 2.0);
         g.planet.temperature = 1;
-        g.advance_keystones(g.planet);
-        assert_eq!(g.charges[coral], 0, "no longer kept through a cold wait");
+        g.advance_keystones(g.planet, genome::GENOME_MA);
+        assert_eq!(g.growth[coral], 0, "no longer kept through a cold wait");
     }
 
     #[test]
@@ -1870,7 +2060,7 @@ mod tests {
         g.planet = REEF;
         let coral = equip(&mut g, "Coral");
         let octo = equip(&mut g, "Octopus");
-        g.charges[coral] = 4;
+        g.growth[coral] = 4 * CHARGE_MA;
         let (c, o) = (report(&g, coral), report(&g, octo));
         assert!(luck(&c) > 0.0);
         assert_eq!(luck(&o), luck(&c));
@@ -1882,7 +2072,7 @@ mod tests {
         let mut g = Game::new(0.0);
         g.planet = Planet { land: 1, ..REEF };
         let fossil = equip(&mut g, "Coelacanth");
-        g.charges[fossil] = 3;
+        g.growth[fossil] = 3 * CHARGE_MA;
         let before = g.effects().luck;
         equip(&mut g, "Megalodon");
         assert_eq!(g.effects().luck, (before * 2.0).min(15.0));
@@ -1966,15 +2156,17 @@ mod tests {
         let mut g = Game::new(0.0);
         g.planet = REEF;
         let coral = equip(&mut g, "Coral");
-        g.charges[coral] = 4;
+        g.growth[coral] = 4 * CHARGE_MA;
         let base = g.max_points();
         g.morphs[coral] = Morph::Giant.bit();
         assert_eq!(g.edition(coral), Morph::Giant);
+        g.earn_keystone_points(4.0);
         assert_eq!(g.max_points(), base + 1);
         let octo = equip(&mut g, "Octopus");
         let copied = report(&g, octo);
         assert_eq!(copied.note.as_deref(), Some("copying Coral"));
         assert!(!copied.gains.contains(&Gain::Points(1)), "{copied:?}");
+        g.earn_keystone_points(4.0);
         assert_eq!(g.max_points(), base + 1, "the octopus adds no point");
         // Asleep, a giant gives nothing either.
         g.planet.temperature = 0;
@@ -2048,7 +2240,7 @@ mod tests {
         };
         let dodo = equip(&mut g, "Dodo");
         for _ in 0..3 {
-            g.advance_keystones(g.planet);
+            g.advance_keystones(g.planet, genome::GENOME_MA);
         }
         assert!(!g.keystones.contains(&dodo));
         assert!(!g.toggle_keystone(dodo), "gone until found again");
@@ -2080,9 +2272,10 @@ mod tests {
     }
 
     #[test]
-    fn about_one_genome_in_five_is_doomed_with_human() {
+    fn about_one_4h_wait_in_five_is_doomed_with_human() {
         let (mut g, _) = with_human();
         g.cycles_done = planet::TUTORIAL_CYCLES;
+        g.set_wait(wait::DEFAULT_HOURS);
         let mut now = 0.0;
         let mut doomed = 0;
         for _ in 0..200 {
@@ -2091,12 +2284,30 @@ mod tests {
             g.accelerate(now);
             now += g.cycle.unwrap().duration + 1.0;
             g.tick(now);
-            assert_eq!(g.doom_risk, DOOM_CHANCE);
+            assert!((g.doom_risk - DOOM_CHANCE).abs() < 1e-6);
             doomed += g.doomed as u32;
             g.genome = None;
             g.doomed = false;
         }
         assert!((20..=60).contains(&doomed), "{doomed} of 200");
+    }
+
+    #[test]
+    fn the_doom_compounds_so_short_waits_risk_the_same() {
+        let (mut g, _) = with_human();
+        g.cycles_done = planet::TUTORIAL_CYCLES;
+        let mut risk = |hours: f32| {
+            g.set_wait(hours);
+            g.accelerate(0.0);
+            g.skip_cycle(0.0);
+            g.genome = None;
+            g.doomed = false;
+            g.planet = with_human().0.planet;
+            g.doom_risk
+        };
+        let (short, long) = (risk(2.0), risk(6.0));
+        let three_short = 1.0 - (1.0 - short).powi(3);
+        assert!((three_short - long).abs() < 1e-5, "{three_short} vs {long}");
     }
 
     #[test]

@@ -56,8 +56,8 @@ in `src/ecology.rs`, e.g. frogs need fresh water, a mammoth needs an Ice
 age). Seven biomes (Ice age, Coal swamp, Reef sea, Savanna, Jungle,
 Hothouse, Primordial sea) rule each other out, and the odds follow how much
 of the planet each habitat covers.
-Then each card rolls a rarity tier (60/25/11/3.5/0.5%, with pity at 3, 10
-and 40 genomes) and a morph (giant 1/20, albino and melanistic 1/64, amber
+Then each card rolls a rarity tier (60/25/11/3.5/0.5%, with pity at 120,
+400 and 1600 Ma waited) and a morph (giant 1/20, albino and melanistic 1/64, amber
 1/512). Nothing is ever sold.
 
 The mass extinction (volcanism 3, followed by an all-Rare "radiation"

@@ -216,11 +216,12 @@ Each card then:
 | Epic | 3.5% | purple `#c07bff` |
 | Legendary | 0.5% | gold `#ffc84a` |
 
-**Pity**, counted in genomes and reset when that tier drops:
+**Pity**, counted in millions of years waited (not genomes, so short waits
+never reach it sooner than long ones) and reset when that tier drops:
 
-- Rare+ at least every **3**.
-- Epic+ within **10**.
-- Legendary within **40**.
+- Rare+ at least every **120 Ma** (3 default 4h waits).
+- Epic+ within **400 Ma** (10).
+- Legendary within **1600 Ma** (40).
 
 A pity roll only fires when an eligible taxon of that tier exists. The
 counter keeps waiting otherwise.
@@ -236,7 +237,7 @@ keystone, each in its own way:
 
 | Morph | Chance | Look | As a keystone |
 |---|---|---|---|
-| Giant | 1/20 | Drawn one size up | +1 adjustment point each shaping |
+| Giant | 1/20 | Drawn one size up | +1 adjustment point per 4h waited |
 | Albino | 1/64 | Pale palette, red eyes | ×1.5, but asleep above Cool (sunburn) |
 | Melanistic | 1/64 | Near-black palette | Ignores temperature: lives at any |
 | Amber | 1/512 | Gold-preserved, prismatic frame | ×2 its bonus |
@@ -250,7 +251,7 @@ or nearly every card would morph.
 
 At Oxygen 5, the Giant chance for arthropods is ×3 (Meganeura: 71 cm
 wingspan at about 35% O₂). Your first morph is guaranteed within your
-first 14 cycles.
+first 560 Ma (14 default waits).
 
 ### Specimens (duplicates)
 
@@ -267,10 +268,16 @@ own planet.
 ### The end of the Earth (Human)
 
 Human is the gamble: x2 Luck and +2 cards, but when a genome rolled with
-Human opens, **1 time in 5 the Earth ends** instead. The roll is made with
+Human opens, the Earth may end instead: **1 time in 5 for a 4h wait**. The
+chance compounds with the wait (about 11% for 2h, 28% for 6h), so splitting
+a wait into short ones never risks the Earth more often. The roll is made with
 the genome, when the wait ends, and saved with it, so reopening the app
 can't change it. While it waits, the genome panel and the EVOLVE IT button
 show the risk ("20% the Earth ends").
+
+**Nothing pays more for being split into short waits.** Pity, keystone
+charges, keystone points and Human's risk all count the time waited, not
+the number of genomes; the boons scale with the wait.
 
 Tapping EVOLVE IT then plays the end of the Earth (`src/collapse.rs`,
 about 9 s, it can't be skipped) instead of the cards, and the genome is
@@ -336,7 +343,7 @@ Legendary 6) × level × morph:
 | **Cards** | +12% chance of +1 card | 3 extra cards |
 | **Morphs** | +8% morph chance | ×3 |
 | **Quick** | −3% real wait | −30% |
-| **Point** | +1 adjustment point | 8 points |
+| **Point** | +1 adjustment point per 4h waited (earned during the wait, fractions carried over) | 8 points |
 | **Soil** | +1 vegetation each cycle | – |
 | **Habitat** | +10% odds for that habitat's animals | – |
 
@@ -344,10 +351,10 @@ Legendary 6) × level × morph:
 |---|---|---|
 | **Flat** | Always on | most commons |
 | **When** | ×2, or only, under a planet condition | Penguin, Wolf (×2 when cold); Ant (only at 35% O₂); Crocodile, Hippo (only with 20%+ fresh water); Lizard, Ostrich (only on bare ground); Dimetrodon (only with volcanoes) |
-| **Grows** | A charge per cycle run with a condition, half the bonus each; one cycle without it empties them | Coral (warm), Bee (forest), Sauropod (hothouse), Coelacanth (the planet left unchanged) |
+| **Grows** | A charge per 40 Ma waited (a 4h wait) with a condition, half the bonus each; one wait without it empties them | Coral (warm), Bee (forest), Sauropod (hothouse), Coelacanth (the planet left unchanged) |
 | **Team** | Stronger with other keystones | Cow, Pig, Chicken, Horse (+half per other farm animal); Dog (×2 with a farm animal); Clownfish (×2 with a cnidarian); Butterfly (×2 with Bee); Shark (+half per fish) |
 | **Copies** | Repeats another keystone's gains | Octopus (the one above); Chimpanzee (the one below, if a mammal); Parrot (the strongest, at half) |
-| **Triggers** | Acts during the reveal | Owl (after a Rare, the next card is luckier); Bat (after a new species, more morphs); Spider (a duplicate feeds a keystone a specimen); Starfish (duplicates charge +⅓ card each, up to 1); Horseshoe Crab (nothing new brings the Legendary pity 2 closer) |
+| **Triggers** | Acts during the reveal | Owl (after a Rare, the next card is luckier); Bat (after a new species, more morphs); Spider (a duplicate feeds a keystone a specimen); Starfish (duplicates charge +⅓ card each, up to 1); Horseshoe Crab (nothing new brings the Legendary pity 80 Ma closer) |
 | **Fragile** | ×3, then leaves after 3 cycles until found again | Dodo |
 | **Extremes** | Never asleep; +2 Luck per lever at its min or max | Tardigrade |
 
@@ -357,9 +364,9 @@ Legendary 6) × level × morph:
 |---|---|---|
 | T. rex | +2 cards | Plant-eater keystones fall asleep |
 | Megalodon | Doubles all Luck | Temperature can't go below Temperate |
-| Human | x2 Luck and +2 cards | 1 genome in 5 ends the Earth (see below) |
+| Human | x2 Luck and +2 cards | A 4h wait has 1 in 5 to end the Earth (see below) |
 | Archaeopteryx | Morphs ×3 | One fewer boon to choose from |
-| Tuatara | A Legendary within 25 genomes | The wait is an hour longer |
+| Tuatara | A Legendary within 1000 Ma | The wait is an hour longer |
 | Platypus | Counts as every team; more morphs | Can't be copied |
 
 Coelacanth (grows with stasis) and Dodo (fragile) are the other two.
@@ -371,11 +378,13 @@ After each genome, you pick **1 of 3**, which applies to the next cycle
 only:
 
 - **Lure.** One clade (e.g. Arthropoda) gets ×3 weight.
-- **Lens.** +1 card.
-- **Catalyst.** Guaranteed Rare+ card.
+- **Lens.** +50% cards.
+- **Catalyst.** A guaranteed Rare+ card, or Epic+ on a 6h wait (which
+  already guarantees a Rare).
 - **Charm.** ×4 morph chance.
-- **Tailwind.** −1 h wait this cycle.
-- **Tectonics.** +2 adjustment points.
+- **Tailwind.** 25% less to wait this cycle.
+- **Tectonics.** +2 adjustment points after a 4h wait, scaled with the wait
+  just run (1 for 2h, 3 for 6h).
 
 ## The 151 taxa
 
@@ -446,7 +455,7 @@ habitat: L = Land, V = Vegetation, O = Oxygen, T = Temperature.
 | 58 | Monkey | Forest | O≤4, 3≤T≤4 | R | Chance of +1 card |
 | 59 | Ape | Forest | O≤4, 3≤T≤4 | E | Better rarity odds |
 | 60 | Chimpanzee | Forest | Jungle | E | Copies the keystone below it, if a mammal |
-| 61 | Human | Land | Savanna | L | x2 Luck and +2 cards; but 1 genome in 5 ends the earth |
+| 61 | Human | Land | Savanna | L | x2 Luck and +2 cards; but a 4h wait has 1 in 5 to end the earth |
 | 62 | Reptile | Land | T≥3 | U | More land finds |
 | 63 | Turtle | Shore | T≥3 | U | Duplicates count double |
 | 64 | Lizard | Land | V≤3, T≥3 | C | Better rarity odds, only on bare ground |
@@ -482,12 +491,12 @@ habitat: L = Land, V = Vegetation, O = Oxygen, T = Temperature.
 | 94 | Dolphin | Sea | L≤2, O≤4, 3≤T≤4 | R | Chance of +1 card |
 | 95 | Lion | Land | Savanna | R | Better rarity odds |
 | 96 | Gorilla | Forest | Jungle | R | +1 adjustment point |
-| 97 | Nautilus | Reef | Reef sea | R | Luck; legendary pity 30 |
+| 97 | Nautilus | Reef | Reef sea | R | Luck; a Legendary within 1200 Ma |
 | 98 | Fly | Land | O≥2 | C | Shorter wait |
 | 99 | Clownfish | Reef | Reef sea | C | More reef finds; x2 with a cnidarian keystone |
 | 100 | Lungfish | Fresh water | O≥2, T≥3 | R | More fresh water finds |
 | 101 | Pig | Land | V≥1, O≤4, T≤4 | U | Better rarity odds for each other farm animal keystone |
-| 102 | Tuatara | Forest | 1≤T≤2 | L | A Legendary within 25 genomes; but the wait is an hour longer |
+| 102 | Tuatara | Forest | 1≤T≤2 | L | A Legendary within 1000 Ma; but the wait is an hour longer |
 | 103 | Sea Turtle | Sea | Reef sea | R | Duplicates count double |
 | 104 | Plesiosaur | Sea | Hothouse | E | Chance of +1 card |
 | 105 | Ichthyosaur | Sea | Hothouse | E | Better rarity odds |
@@ -530,7 +539,7 @@ habitat: L = Land, V = Vegetation, O = Oxygen, T = Temperature.
 | 142 | Moss Animal | Sea | Primordial sea | C | More sea finds |
 | 143 | Brittle Star | Sea | Primordial sea | C | Shorter wait |
 | 144 | Carp | Fresh water | O≥2, 1≤T≤2 | C | Duplicates count double |
-| 145 | Dickinsonia | Sea | Primordial sea | R | More morphs; one every 7 genomes |
+| 145 | Dickinsonia | Sea | Primordial sea | R | More morphs; one every 280 Ma |
 | 146 | Dimetrodon | Land | O≥2, T≥3 | R | Shorter wait, only with volcanoes |
 | 147 | Lucy | Land | Savanna | E | +1 adjustment point |
 | 148 | Neanderthal | Land | Ice age | E | Better rarity odds |

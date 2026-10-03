@@ -80,9 +80,9 @@ pub enum Bonus {
     DoubleSpecimens,
     /// More finds in this habitat.
     Share(Habitat),
-    /// Luck, and the Legendary pity window shrinks from 40 to 30.
+    /// Luck, and the Legendary pity shrinks from 1600 Ma to 1200.
     LivingFossil,
-    /// Morphs, and a morph is guaranteed at least once every 7 genomes.
+    /// Morphs, and a morph is guaranteed at least once every 280 Ma.
     Oddity,
 }
 
@@ -93,12 +93,12 @@ impl Bonus {
             Bonus::Cards => "Chance of +1 card".into(),
             Bonus::Morph => "More morphs".into(),
             Bonus::Quick => "Shorter wait".into(),
-            Bonus::Point => "+1 adjustment point".into(),
+            Bonus::Point => "+1 adjustment point per 4h waited".into(),
             Bonus::Soil => "+1 vegetation each cycle".into(),
             Bonus::DoubleSpecimens => "Duplicates count double".into(),
             Bonus::Share(h) => format!("More {} finds", h.name().to_lowercase()),
-            Bonus::LivingFossil => "Luck; legendary pity 30".into(),
-            Bonus::Oddity => "More morphs; one every 7 genomes".into(),
+            Bonus::LivingFossil => "Luck; a Legendary within 1200 Ma".into(),
+            Bonus::Oddity => "More morphs; one every 280 Ma".into(),
         }
     }
 }
@@ -191,11 +191,11 @@ pub enum Catch {
     Tyrant,
     /// Doubles all luck; Temperature can't go below Temperate.
     Apex,
-    /// x2 luck and +2 cards; 1 genome in 5 ends the Earth instead.
+    /// x2 luck and +2 cards; a 4h wait has 1 in 5 to end the Earth instead.
     Hubris,
     /// Morphs x3; one fewer boon to choose from.
     Feathers,
-    /// Legendary pity 25; the wait is an hour longer.
+    /// Legendary pity 1000 Ma; the wait is an hour longer.
     Ancient,
     /// Counts as every team; can't be copied.
     Wildcard,
@@ -208,7 +208,7 @@ impl Catch {
             Catch::Apex => "Doubles all Luck",
             Catch::Hubris => "x2 Luck and +2 cards",
             Catch::Feathers => "Morphs x3",
-            Catch::Ancient => "A Legendary within 25 genomes",
+            Catch::Ancient => "A Legendary within 1000 Ma",
             Catch::Wildcard => "Counts as every team; more morphs",
         }
     }
@@ -217,7 +217,7 @@ impl Catch {
         match self {
             Catch::Tyrant => "Plant-eater keystones fall asleep",
             Catch::Apex => "Temperature can't go below Temperate",
-            Catch::Hubris => "1 genome in 5 ends the Earth",
+            Catch::Hubris => "A 4h wait has 1 in 5 to end the Earth",
             Catch::Feathers => "One fewer boon to choose from",
             Catch::Ancient => "The wait is an hour longer",
             Catch::Wildcard => "Can't be copied",
@@ -259,7 +259,7 @@ pub enum Rule {
     AfterNew,
     /// Each duplicate gives a random keystone +1 specimen.
     Feed,
-    /// A genome with nothing new brings the Legendary pity 2 closer.
+    /// A genome with nothing new brings the Legendary pity 80 Ma closer.
     NoNewPity,
     /// Giant morphs x3 while the condition holds.
     GiantWhen(Cond),

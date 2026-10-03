@@ -907,7 +907,9 @@ pub fn draw_wait_panel(game: &Game, sprites: &Sprites) {
         fit_px(&cards, tw, px * 0.9),
         TEXT,
     );
-    let extra = if f.odds.catalyst {
+    let extra = if f.odds.sure_epic {
+        ("one Epic or better is sure".to_string(), GOLD)
+    } else if f.odds.catalyst {
         ("one Rare or better is sure".to_string(), GOLD)
     } else {
         (
@@ -2217,7 +2219,7 @@ pub fn draw_boons(game: &Game, sprites: &Sprites, assets: &Assets, hover: Option
             r.h * 0.24,
             TEXT,
         );
-        let d = b.describe(&game.phy);
+        let d = b.describe(game);
         text(
             &d,
             r.x + r.h * 1.05,
