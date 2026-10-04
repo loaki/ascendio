@@ -894,10 +894,14 @@ pub fn draw_wait_panel(game: &Game, sprites: &Sprites) {
         frame(Rect::new(cx, y, cw, ch), fill, edge, 1.5);
     }
     let tx = x + area + u * 2.0;
+    let new = format!("{:.0}% new", f.odds.discovery * 100.0);
     let cards = if chance > 0.0 {
-        format!("{sure} cards  ·  {:.0}% for one more", chance * 100.0)
+        format!(
+            "{sure} cards  ·  {:.0}% for one more  ·  {new}",
+            chance * 100.0
+        )
     } else {
-        format!("{sure} cards")
+        format!("{sure} cards  ·  {new}")
     };
     let tw = x + w - tx;
     text(
@@ -915,7 +919,7 @@ pub fn draw_wait_panel(game: &Game, sprites: &Sprites) {
         (
             format!(
                 "{:.1}% of cards are morphs",
-                (genome::morph_chance(f.odds.morph_mult) * f.odds.morph_rad).min(1.0) * 100.0
+                genome::morph_chance(f.odds.morph_mult, f.odds.morph_rad) * 100.0
             ),
             PINK,
         )
@@ -1112,6 +1116,8 @@ pub enum Sort {
     /// The tree's own order.
     #[default]
     Tree,
+    /// By kind of bonus, then the biggest first (+48% cards before +16%).
+    Bonus,
     /// Legendary first.
     Rarity,
     /// Highest level first.
@@ -1124,8 +1130,9 @@ pub enum Sort {
 }
 
 impl Sort {
-    pub const ALL: [Sort; 6] = [
+    pub const ALL: [Sort; 7] = [
         Sort::Tree,
+        Sort::Bonus,
         Sort::Rarity,
         Sort::Level,
         Sort::Age,
@@ -1136,6 +1143,7 @@ impl Sort {
     pub fn label(self) -> &'static str {
         match self {
             Sort::Tree => "Tree",
+            Sort::Bonus => "Bonus",
             Sort::Rarity => "Rarity",
             Sort::Level => "Level",
             Sort::Age => "Age",
@@ -1152,8 +1160,21 @@ impl Sort {
                 game.level[t]
             }
         };
+        // The size of its bonus: strength, tripled for the Dodo.
+        let size = |t: usize| {
+            let eco = game.taxon(t).eco;
+            let triple = if eco.rule == Rule::Fragile { 3.0 } else { 1.0 };
+            game.keystone_strength(t) * triple
+        };
+        let kind = |t: usize| {
+            let b = game.taxon(t).eco.bonus;
+            Bonus::ALL.iter().position(|&k| k == b).unwrap_or(0)
+        };
         match self {
             Sort::Tree => {}
+            Sort::Bonus => {
+                taxa.sort_by(|&a, &b| kind(a).cmp(&kind(b)).then(size(b).total_cmp(&size(a))))
+            }
             Sort::Rarity => taxa.sort_by_key(|&t| std::cmp::Reverse(game.taxon(t).eco.tier)),
             Sort::Level => taxa.sort_by_key(|&t| std::cmp::Reverse(level(t))),
             Sort::Age => taxa.sort_by(|&a, &b| game.taxon(b).mya.total_cmp(&game.taxon(a).mya)),
@@ -1172,26 +1193,23 @@ pub enum Filter {
     Active,
     Luck,
     Cards,
+    Discovery,
     Morphs,
     Wait,
-    Habitat,
-    /// Adjustment points and vegetation.
-    Planet,
-    Duplicates,
+    Points,
     Fossils,
 }
 
 impl Filter {
-    pub const ALL: [Filter; 10] = [
+    pub const ALL: [Filter; 9] = [
         Filter::All,
         Filter::Active,
         Filter::Luck,
         Filter::Cards,
+        Filter::Discovery,
         Filter::Morphs,
         Filter::Wait,
-        Filter::Habitat,
-        Filter::Planet,
-        Filter::Duplicates,
+        Filter::Points,
         Filter::Fossils,
     ];
 
@@ -1201,11 +1219,10 @@ impl Filter {
             Filter::Active => "Active",
             Filter::Luck => "Luck",
             Filter::Cards => "Cards",
+            Filter::Discovery => "Discovery",
             Filter::Morphs => "Morphs",
             Filter::Wait => "Shorter wait",
-            Filter::Habitat => "Habitat",
-            Filter::Planet => "Planet",
-            Filter::Duplicates => "Duplicates",
+            Filter::Points => "Points",
             Filter::Fossils => "Fossils",
         }
     }
@@ -1215,13 +1232,12 @@ impl Filter {
         match self {
             Filter::All => true,
             Filter::Active => !game.is_fossil(t) && game.dormant_reason(t).is_none(),
-            Filter::Luck => matches!(bonus, Bonus::Luck | Bonus::LivingFossil),
+            Filter::Luck => bonus == Bonus::Luck,
             Filter::Cards => bonus == Bonus::Cards,
-            Filter::Morphs => matches!(bonus, Bonus::Morph | Bonus::Oddity),
+            Filter::Discovery => bonus == Bonus::Discovery,
+            Filter::Morphs => bonus == Bonus::Morph,
             Filter::Wait => bonus == Bonus::Quick,
-            Filter::Habitat => matches!(bonus, Bonus::Share(_)),
-            Filter::Planet => matches!(bonus, Bonus::Point | Bonus::Soil),
-            Filter::Duplicates => bonus == Bonus::DoubleSpecimens,
+            Filter::Points => bonus == Bonus::Point,
             Filter::Fossils => game.is_fossil(t),
         }
     }
@@ -1473,16 +1489,35 @@ pub fn draw_keystones(
         px * 1.2,
         ACCENT_WARN,
     );
-    if !game.keystones_editable() {
-        let note = "Locked until you open the waiting genome";
-        text(
-            note,
-            sw * 0.04,
-            top + render::u() * 15.5,
-            fit_px(note, sw * 0.92, px * 0.8),
+    // Under the title: why it's locked, else the biome bonuses on.
+    let biomes = game.active_biomes();
+    let (note, note_col) = if !game.keystones_editable() {
+        (
+            "Locked until you open the waiting genome".to_string(),
             TEXT_DIM,
-        );
-    }
+        )
+    } else if biomes.is_empty() {
+        (
+            format!(
+                "{} keystones of one biome give its bonus",
+                ecology::BIOME_SET
+            ),
+            TEXT_DIM,
+        )
+    } else {
+        let on: Vec<String> = biomes
+            .iter()
+            .map(|&b| format!("{} {}", b.name(), ecology::biome_bonus_label(b)))
+            .collect();
+        (on.join("  ·  "), LIME)
+    };
+    text(
+        &note,
+        sw * 0.04,
+        top + render::u() * 15.5,
+        fit_px(&note, sw * 0.92, px * 0.8),
+        note_col,
+    );
 
     let reports = game.keystone_reports();
     for i in 0..game.keystone_slots() {
@@ -1684,8 +1719,8 @@ pub fn draw_keystones(
                 .into_iter()
                 .map(|l| (l, LIME))
                 .collect();
-            if let Rule::Catch(c) = eco.rule {
-                lines.push((format!("But: {}", c.drawback()), LOCK_RED));
+            if let Some(d) = eco.rule.drawback() {
+                lines.push((format!("But: {d}"), LOCK_RED));
             }
             for (i, (line, c)) in lines.iter().take(3).enumerate() {
                 let y = r.y + r.h * (0.52 + 0.13 * i as f32);
@@ -1910,9 +1945,9 @@ pub fn draw_detail(game: &Game, taxon: usize, sprites: &Sprites, assets: &Assets
             y += px * 1.4;
             text(&line, x, y, px, LIME);
         }
-        if let Rule::Catch(c) = eco.rule {
+        if let Some(d) = eco.rule.drawback() {
             y += px * 1.4;
-            let catch = format!("But: {}", c.drawback());
+            let catch = format!("But: {d}");
             text(&catch, x, y, fit_px(&catch, r.w * 0.86, px), LOCK_RED);
         }
     } else {
@@ -2073,16 +2108,20 @@ pub fn draw_biomes(game: &Game, sprites: &Sprites) {
     let x = r.x + u * 5.0;
     let w = r.w - u * 10.0;
     text("BIOMES", x, r.y + u * 11.0, px * 1.3, ACCENT_WARN);
-    let note = "Each rules the others out. Animals of a biome live only there.";
+    let note = format!(
+        "Animals of a biome live only there. {} keystones of a biome give its bonus.",
+        ecology::BIOME_SET
+    );
     text(
-        note,
+        &note,
         x,
         r.y + u * 18.0,
-        fit_px(note, w, px * 0.75),
+        fit_px(&note, w, px * 0.75),
         TEXT_DIM,
     );
 
     let top = r.y + u * 24.0;
+    let active = game.active_biomes();
     let row_h = (r.y + r.h - u * 10.0 - top) / Biome::ALL.len() as f32;
     let p = &game.planet;
     for (i, b) in Biome::ALL.into_iter().enumerate() {
@@ -2092,7 +2131,23 @@ pub fn draw_biomes(game: &Game, sprites: &Sprites) {
             draw_line(x, y, x + w, y, 1.0, EDGE);
         }
         let name_y = y + row_h * 0.27;
-        text(&b.name().to_uppercase(), x, name_y, px, col);
+        let name = b.name().to_uppercase();
+        text(&name, x, name_y, px, col);
+        // Its keystone bonus, lit while it's on.
+        let on = active.contains(&b);
+        let bonus = if on {
+            format!("{}  ON", ecology::biome_bonus_label(b))
+        } else {
+            ecology::biome_bonus_label(b)
+        };
+        let bx = x + text_width(&name, px) + u * 4.0;
+        text(
+            &bonus,
+            bx,
+            name_y,
+            px * 0.8,
+            if on { LIME } else { TEXT_DIM },
+        );
         let members: Vec<usize> = (0..game.phy.len())
             .filter(|&t| game.taxon(t).eco.needs.biome == Some(b))
             .collect();
@@ -2167,7 +2222,7 @@ pub fn boon_rect(i: usize) -> Rect {
 
 fn boon_color(b: Boon) -> Color {
     match b {
-        Boon::Lure(_) => rgb(0x5AA8FF),
+        Boon::Discovery => rgb(0x5AA8FF),
         Boon::Lens => LIME,
         Boon::Catalyst => rgb(0xC07BFF),
         Boon::Charm => PINK,
@@ -2208,10 +2263,6 @@ pub fn draw_boons(game: &Game, sprites: &Sprites, assets: &Assets, hover: Option
             ..Default::default()
         };
         sprites::draw_sprite(sprites.boon(b.icon()), ic, r.h * 0.72, bob, WHITE);
-        if let Boon::Lure(taxon) = b {
-            let at = ic + vec2(r.h * 0.26, r.h * 0.24);
-            draw_taxon(sprites, game, taxon, Morph::None, at, r.h * 0.4, WHITE);
-        }
         text(
             b.title(),
             r.x + r.h * 1.05,

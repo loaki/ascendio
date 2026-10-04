@@ -146,9 +146,8 @@ impl Planet {
         }
     }
 
-    /// The linked-lever rules applied once a cycle has run. `soil` is the
-    /// number of "+1 vegetation per cycle" keystones.
-    pub fn after_cycle(&self, soil: u8) -> Planet {
+    /// The linked-lever rules applied once a cycle has run.
+    pub fn after_cycle(&self) -> Planet {
         let mut p = *self;
         if p.vegetation >= 3 {
             p.set(Lever::Oxygen, p.oxygen + 1); // forests breathe
@@ -158,9 +157,6 @@ impl Planet {
         }
         if p.temperature <= 1 {
             p.set(Lever::Land, p.land + 1); // ice locks up the sea
-        }
-        if soil > 0 {
-            p.set(Lever::Vegetation, p.vegetation + soil);
         }
         p
     }
@@ -546,31 +542,21 @@ mod tests {
             oxygen: 3,
             ..Planet::default()
         };
-        assert_eq!(forest.after_cycle(0).oxygen, 4, "forests breathe");
+        assert_eq!(forest.after_cycle().oxygen, 4, "forests breathe");
 
         let vents = Planet {
             volcanism: 2,
             temperature: 3,
             ..Planet::default()
         };
-        assert_eq!(vents.after_cycle(0).temperature, 4, "volcanic greenhouse");
+        assert_eq!(vents.after_cycle().temperature, 4, "volcanic greenhouse");
 
         let ice = Planet {
             temperature: 1,
             land: 1,
             ..Planet::default()
         };
-        assert_eq!(ice.after_cycle(0).land, 2, "ice locks up the sea");
-    }
-
-    #[test]
-    fn soil_keystones_grow_vegetation_within_the_land_cap() {
-        let p = Planet {
-            land: 1,
-            vegetation: 1,
-            ..Planet::default()
-        };
-        assert_eq!(p.after_cycle(3).vegetation, 2);
+        assert_eq!(ice.after_cycle().land, 2, "ice locks up the sea");
     }
 
     #[test]

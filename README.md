@@ -28,24 +28,29 @@ how to run it.
    keystones will bring. Longer waits pay more per hour (`src/wait.rs`):
    1 card at 2h, 2 at 4h, 5 at 6h (and 1, 2, 3 adjustment points for the
    next shaping), luck that grows with the square of the time, morphs
-   x1.5 from 4h, and at 6h morphs x2 plus a guaranteed Rare. So one 6h wait
+   x1.25 from 4h, and at 6h morphs x1.5 plus a guaranteed Rare. So one 6h wait
    beats two 3h ones. Each hour is 10 Ma. The countdown runs on the wall
-   clock, so it keeps going with the app closed. Nothing can be changed
+   clock, so it keeps going with the app closed; on Android it's anchored
+   to the phone's uptime (`src/clock.rs`), so changing the phone's time
+   doesn't skip it. Nothing can be changed
    until it ends.
 3. **Evolve the genome** (`src/opening.rs`). A 3D double helix gives no
    hint of what's inside. Each of three taps mutates a third of its base
    pairs; the third collapses it into a core that detonates like a supernova
    in the best card's colour, and the cards fly into a row of slots: each
    tap reveals the next one (a silhouette roulette for a new species), and
-   its slot fills with its rarity colour. A new species gets a full reveal (silhouette, clues, then colour),
-   and a duplicate becomes a specimen that levels its animal up.
-4. **Steer.** Pick 1 of 3 boons for the next cycle (Lure a clade, +1 card, a
-   guaranteed Rare, x4 morphs, less wait, +2 points), and equip up to 3
-   discovered animals as **keystones**. Each has a bonus and a rule (grows
-   while the reef is warm, x2 in the cold, copies its neighbour, a legendary
-   perk with a catch...), and works only while the planet suits it: an
-   unsuited one is asleep. Human doubles Luck and adds 2 cards, but 1 genome
-   in 5 ends the Earth (`src/collapse.rs`): a new Earth starts from the
+   its slot fills with its rarity colour. A new species gets a full reveal
+   (silhouette, clues, then colour), and an animal you own becomes a
+   specimen that levels it up.
+4. **Steer.** Pick 1 of 3 boons for the next cycle (+25% discovery, +1
+   card, a guaranteed Rare, x4 morphs, less wait, more points), and equip
+   up to 3 discovered animals as **keystones**. Each adds luck, cards,
+   discovery, morphs, a shorter wait or points; a few have a special rule
+   (Octopus, Chimpanzee and Parrot copy their kin above, a legendary perk
+   with a catch...), and three keystones of one biome add its bonus. A
+   keystone works only while the planet suits it: an unsuited one is
+   asleep. Human doubles Luck and adds 2 cards, but a 4h wait has 1 in 5 to
+   end the Earth (`src/collapse.rs`): a new Earth starts from the
    Urmetazoan with +1 RAD (rarer cards, more morphs), and everything found
    stays as a fossil to find again. A morph changes what it does (Amber x2, Albino
    x1.5 but sunburns, Melanistic ignores temperature, Giant +1 adjustment point).
@@ -57,8 +62,9 @@ age). Seven biomes (Ice age, Coal swamp, Reef sea, Savanna, Jungle,
 Hothouse, Primordial sea) rule each other out, and the odds follow how much
 of the planet each habitat covers.
 Then each card rolls a rarity tier (60/25/11/3.5/0.5%, with pity at 120,
-400 and 1600 Ma waited) and a morph (giant 1/20, albino and melanistic 1/64, amber
-1/512). Nothing is ever sold.
+400 and 1600 Ma waited), whether it's a new species or one you own
+(discovery: 15% at 2h, 30% at 4h, 45% at 6h, plus keystones), and a morph
+(giant 1/40, albino and melanistic 1/128, amber 1/1024). Nothing is ever sold.
 
 The mass extinction (volcanism 3, followed by an all-Rare "radiation"
 genome) is designed in `docs/DESIGN.md` but not implemented yet.
@@ -302,6 +308,7 @@ src/
 ├── layout.rs    tidy left-to-right tree layout for the map
 ├── view.rs      camera (pan/zoom/fit) and gesture recognition
 ├── sprites.rs   pixel art: texture builder, morph recolours, animation
+├── clock.rs     the wall clock the player can't wind forward
 └── save.rs      where the save data actually lives
 server/          the leaderboard's Cloudflare Worker (see its README)
 docs/

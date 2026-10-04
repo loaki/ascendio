@@ -178,4 +178,20 @@ import java.util.concurrent.ConcurrentHashMap;
             }
         });
     }
+
+    // --- the trusted clock (src/clock.rs) ---------------------------------
+    // Uptime that changing the phone's time doesn't move, and the restart
+    // counter that says when it started over (-1 if unknown).
+
+    public long uptimeMs() {
+        return android.os.SystemClock.elapsedRealtime();
+    }
+
+    public int bootCount() {
+        try {
+            return Settings.Global.getInt(getContentResolver(), Settings.Global.BOOT_COUNT);
+        } catch (Exception e) {
+            return -1;
+        }
+    }
 //% END

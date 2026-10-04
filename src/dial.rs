@@ -90,7 +90,7 @@ pub fn draw(hours: f32, sprites: &Sprites, assets: &Assets) {
 
     milestone(
         wait::MORPH_HOURS,
-        "MORPHS x1.5",
+        "MORPHS x1.25",
         LIME,
         CHARM_ICON,
         sprites,

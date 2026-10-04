@@ -19,7 +19,10 @@ const CARDS_AT: [(f32, f32); 3] = [(2.0, 1.0), (4.0, 2.0), (6.0, 5.0)];
 /// Adjustment points for the next shaping at 2h, 4h and 6h; half hours in
 /// between round down.
 const POINTS_AT: [(f32, f32); 3] = [(2.0, 1.0), (4.0, 2.0), (6.0, 3.0)];
-/// From this long, morphs are 1.5x as likely.
+/// The chance a card is a new species at 2h, 4h and 6h (the rest are
+/// animals already owned, which level up).
+const DISCOVERY_AT: [(f32, f32); 3] = [(2.0, 0.15), (4.0, 0.3), (6.0, 0.45)];
+/// From this long, morphs are 1.25x as likely (1.5x at `SURE_RARE_HOURS`).
 pub const MORPH_HOURS: f32 = 4.0;
 /// A wait this long guarantees one Rare-or-better card and doubles morphs.
 pub const SURE_RARE_HOURS: f32 = 6.0;
@@ -43,6 +46,8 @@ pub struct Bonus {
     pub luck: f32,
     pub morph_mult: f32,
     pub sure_rare: bool,
+    /// The chance each card is a species never found: low at 2h, high at 6h.
+    pub discovery: f32,
 }
 
 /// `table` read at `hours`, linear between its points.
@@ -73,13 +78,14 @@ pub fn bonus(hours: f32) -> Bonus {
         cards: cards(hours),
         luck: 0.75 * past * past,
         morph_mult: if hours >= SURE_RARE_HOURS {
-            2.0
-        } else if hours >= MORPH_HOURS {
             1.5
+        } else if hours >= MORPH_HOURS {
+            1.25
         } else {
             1.0
         },
         sure_rare: hours >= SURE_RARE_HOURS,
+        discovery: lerp(&DISCOVERY_AT, hours),
     }
 }
 
@@ -94,7 +100,7 @@ mod tests {
         let w = genome::tier_weights(b.luck);
         let rare = b.cards * (w[2] + w[3] + w[4]) / 100.0;
         let rare = if b.sure_rare { rare.max(1.0) } else { rare };
-        (rare, b.cards * genome::morph_chance(b.morph_mult))
+        (rare, b.cards * genome::morph_chance(b.morph_mult, 1.0))
     }
 
     #[test]

@@ -113,8 +113,9 @@ impl Morph {
 
 /// Above this temperature an albino keystone sunburns and sleeps.
 pub const ALBINO_MAX_TEMP: u8 = 2;
-/// The morph multiplier's cap: past it nearly every card would morph.
-const MORPH_MULT_MAX: f32 = 6.0;
+/// The most a card can be a morph, however keystones, boons, the wait and
+/// radiation stack: morphs stay rare.
+pub const MORPH_CHANCE_MAX: f32 = 0.15;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Card {
@@ -173,38 +174,25 @@ impl Pity {
 pub const GENOME_MA: u32 = 40;
 const RARE_PITY: u32 = 3 * GENOME_MA;
 const EPIC_PITY: u32 = 10 * GENOME_MA;
-pub const LEGENDARY_PITY: u32 = 40 * GENOME_MA;
+const LEGENDARY_PITY: u32 = 40 * GENOME_MA;
 /// A fresh player's first morph arrives within this many Ma.
 const FIRST_MORPH_PITY: u32 = 14 * GENOME_MA;
 
-/// Everything that bends the odds for one genome: keystones + the chosen boon.
+/// Everything that bends the odds for one genome: the wait, keystones and
+/// the chosen boon.
 #[derive(Clone, Debug)]
 pub struct Odds {
     pub cards: usize,
-    /// Percentage points moved from Common to the rare tiers (capped at 15).
+    /// Luck: points moved from Common to the rare tiers (keystones up to
+    /// 20, plus the wait and radiation; 50 at most).
     pub luck: f32,
     pub morph_mult: f32,
-    /// Weight multiplier per habitat, indexed by `Habitat::index`.
-    pub affinity: [f32; 6],
-    /// Taxa under this node get x3 weight (the Lure boon).
-    pub lure: Option<usize>,
+    /// The chance each card is a species never found (else one you own).
+    pub discovery: f32,
     /// At least one card is Rare+ (a 6h wait, the Catalyst boon).
     pub catalyst: bool,
     /// At least one card is Epic+ (Catalyst on a 6h wait).
     pub sure_epic: bool,
-    /// Ma without a Legendary before one is guaranteed.
-    pub legendary_pity: u32,
-    /// Morph guaranteed at least every this many Ma, once the first-morph
-    /// guarantee is spent.
-    pub morph_window: Option<u32>,
-    /// Extra multiplier on giant morphs (Meganeura).
-    pub giant_mult: f32,
-    /// Luck added to every card after a Rare-or-better one (Owl).
-    pub after_rare_luck: f32,
-    /// Morph multiplier added to every card after a new species (Bat).
-    pub after_new_morph: f32,
-    /// Ma added to the Legendary pity when a genome holds nothing new.
-    pub no_new_pity: u32,
     /// Millions of years this genome's wait ran: what it adds to the pity.
     pub ma: u32,
     /// Radiation's morph multiplier, applied past the usual cap.
@@ -217,16 +205,9 @@ impl Default for Odds {
             cards: 3,
             luck: 0.0,
             morph_mult: 1.0,
-            affinity: [1.0; 6],
-            lure: None,
+            discovery: 1.0,
             catalyst: false,
             sure_epic: false,
-            legendary_pity: LEGENDARY_PITY,
-            morph_window: None,
-            giant_mult: 1.0,
-            after_rare_luck: 0.0,
-            after_new_morph: 0.0,
-            no_new_pity: 0,
             ma: GENOME_MA,
             morph_rad: 1.0,
         }
@@ -266,7 +247,7 @@ pub fn blocked_hint(phy: &Phylogeny, found: &[bool], planet: &Planet) -> Option<
 
 /// Percent chance of each tier, Common first, after `luck`.
 pub fn tier_weights(luck: f32) -> [f32; 5] {
-    // Past 15 only radiation pushes; Common never drops below 10%.
+    // Common never drops below 10%, whatever the luck.
     let luck = luck.clamp(0.0, 50.0);
     let rare_total = 11.0 + 3.5 + 0.5;
     [
@@ -291,8 +272,8 @@ fn roll_tier(rng: &mut Rng, luck: f32) -> Tier {
 }
 
 /// How likely `taxon` is against the others of its tier: its best habitat's
-/// share of the planet, times the keystones' affinity for that habitat.
-fn weight(phy: &Phylogeny, taxon: usize, planet: &Planet, odds: &Odds) -> f32 {
+/// share of the planet.
+fn weight(phy: &Phylogeny, taxon: usize, planet: &Planet) -> f32 {
     let eco = phy.taxa[taxon].eco;
     let shares = planet.habitat_shares();
     let aff = eco
@@ -300,22 +281,17 @@ fn weight(phy: &Phylogeny, taxon: usize, planet: &Planet, odds: &Odds) -> f32 {
         .habitats
         .iter()
         .filter(|h| planet.has(**h))
-        .map(|h| (shares[h.index()] * odds.affinity[h.index()]).max(0.01))
+        .map(|h| shares[h.index()].max(0.01))
         .fold(0.01_f32, f32::max);
-    let lure = match odds.lure {
-        Some(root) if is_under(phy, taxon, root) => 3.0,
-        _ => 1.0,
-    };
-    aff * lure
+    aff
 }
 
-/// Picks an eligible taxon at `tier`, falling back downward, then upward.
+/// Picks a taxon of `pool` at `tier`, falling back downward, then upward.
 fn pick(
     phy: &Phylogeny,
     pool: &[usize],
     tier: Tier,
     planet: &Planet,
-    odds: &Odds,
     rng: &mut Rng,
 ) -> Option<usize> {
     let at = |t: Tier| -> Vec<usize> {
@@ -336,10 +312,10 @@ fn pick(
         if bucket.is_empty() {
             continue;
         }
-        let total: f32 = bucket.iter().map(|&i| weight(phy, i, planet, odds)).sum();
+        let total: f32 = bucket.iter().map(|&i| weight(phy, i, planet)).sum();
         let mut r = rng.unit() * total;
         for &i in &bucket {
-            r -= weight(phy, i, planet, odds);
+            r -= weight(phy, i, planet);
             if r <= 0.0 {
                 return Some(i);
             }
@@ -350,38 +326,38 @@ fn pick(
 }
 
 /// Odds of each morph per card at `morph_mult` 1 (a giant can be boosted).
-const AMBER_ODDS: f32 = 1.0 / 512.0;
-const ALBINO_ODDS: f32 = 1.0 / 64.0;
-const MELANISTIC_ODDS: f32 = 1.0 / 64.0;
-const GIANT_ODDS: f32 = 1.0 / 20.0;
+const AMBER_ODDS: f32 = 1.0 / 1024.0;
+const ALBINO_ODDS: f32 = 1.0 / 128.0;
+const MELANISTIC_ODDS: f32 = 1.0 / 128.0;
+const GIANT_ODDS: f32 = 1.0 / 40.0;
 
-/// The chance a card is any morph, ignoring the arthropod giant boost.
-pub fn morph_chance(morph_mult: f32) -> f32 {
-    morph_mult.clamp(0.0, MORPH_MULT_MAX)
-        * (AMBER_ODDS + ALBINO_ODDS + MELANISTIC_ODDS + GIANT_ODDS)
+/// The chance a card is any morph (ignoring the arthropod giant boost),
+/// capped at `MORPH_CHANCE_MAX`.
+pub fn morph_chance(morph_mult: f32, morph_rad: f32) -> f32 {
+    let m = morph_mult.max(0.0) * morph_rad;
+    (m * (AMBER_ODDS + ALBINO_ODDS + MELANISTIC_ODDS + GIANT_ODDS)).min(MORPH_CHANCE_MAX)
 }
 
-/// `extra` adds to the morph multiplier for this card alone.
-fn roll_morph(
-    phy: &Phylogeny,
-    taxon: usize,
-    planet: &Planet,
-    odds: &Odds,
-    extra: f32,
-    rng: &mut Rng,
-) -> Morph {
-    let m = (odds.morph_mult + extra).clamp(0.0, MORPH_MULT_MAX) * odds.morph_rad;
+fn roll_morph(phy: &Phylogeny, taxon: usize, planet: &Planet, odds: &Odds, rng: &mut Rng) -> Morph {
+    let m = odds.morph_mult.max(0.0) * odds.morph_rad;
     let arthropod = phy.taxa.iter().position(|t| t.name == "Arthropod");
     let giant_boost = if planet.oxygen >= 5 && arthropod.is_some_and(|a| is_under(phy, taxon, a)) {
         3.0
     } else {
         1.0
     };
+    // Every morph scaled down together past the cap, so their mix holds.
+    let total = m * (AMBER_ODDS + ALBINO_ODDS + MELANISTIC_ODDS + giant_boost * GIANT_ODDS);
+    let m = if total > MORPH_CHANCE_MAX {
+        m * MORPH_CHANCE_MAX / total
+    } else {
+        m
+    };
     let r = rng.unit();
     let amber = m * AMBER_ODDS;
     let albino = amber + m * ALBINO_ODDS;
     let melanistic = albino + m * MELANISTIC_ODDS;
-    let giant = melanistic + m * giant_boost * odds.giant_mult * GIANT_ODDS;
+    let giant = melanistic + m * giant_boost * GIANT_ODDS;
     if r < amber {
         Morph::Amber
     } else if r < albino {
@@ -395,17 +371,23 @@ fn roll_morph(
     }
 }
 
-fn specimen(phy: &Phylogeny, found: &[bool], planet: &Planet, rng: &mut Rng) -> usize {
+/// The animals a duplicate card can be: those owned that live on the
+/// planet, or any owned if none does.
+fn owned_pool(phy: &Phylogeny, found: &[bool], planet: &Planet) -> Vec<usize> {
     let living: Vec<usize> = (0..phy.len())
         .filter(|&i| found[i] && phy.taxa[i].eco.needs.met_by(planet))
         .collect();
-    let owned: Vec<usize> = (0..phy.len()).filter(|&i| found[i]).collect();
-    let from = if living.is_empty() { &owned } else { &living };
-    from[(rng.next_u64() % from.len() as u64) as usize]
+    if living.is_empty() {
+        (0..phy.len()).filter(|&i| found[i]).collect()
+    } else {
+        living
+    }
 }
 
-/// Rolls one genome against the collection before opening. Cards come back
-/// best last (reveal order) and `pity` is advanced.
+/// Rolls one genome against the collection before opening. Each card rolls
+/// a rarity, then whether it's a new species (`Odds::discovery`) or one
+/// already owned, which levels it up. Cards come back best last (reveal
+/// order) and `pity` is advanced.
 pub fn roll(
     phy: &Phylogeny,
     found: &[bool],
@@ -415,17 +397,13 @@ pub fn roll(
     rng: &mut Rng,
 ) -> Vec<Card> {
     let mut seen = found.to_vec();
+    let owned = owned_pool(phy, found, planet);
     let count = odds.cards.max(1);
     let mut cards = Vec::with_capacity(count);
 
     for k in 0..count {
         let last = k == count - 1;
-        let owl = if cards.iter().any(|c: &Card| c.tier >= Tier::Rare) {
-            odds.after_rare_luck
-        } else {
-            0.0
-        };
-        let mut tier = roll_tier(rng, odds.luck + owl);
+        let mut tier = roll_tier(rng, odds.luck);
         let best = cards
             .iter()
             .map(|c: &Card| c.tier)
@@ -439,18 +417,30 @@ pub fn roll(
             if (odds.sure_epic || pity.epic_ma + odds.ma >= EPIC_PITY) && best < Tier::Epic {
                 floor = floor.max(Tier::Epic);
             }
-            if pity.legendary_ma + odds.ma >= odds.legendary_pity && best < Tier::Legendary {
+            if pity.legendary_ma + odds.ma >= LEGENDARY_PITY && best < Tier::Legendary {
                 floor = floor.max(Tier::Legendary);
             }
         }
-        let pool = eligible(phy, &seen, planet);
-        // Only lift the roll if something that rare can drop; otherwise the
-        // pity keeps waiting.
-        if tier < floor && pool.iter().any(|&i| phy.taxa[i].eco.tier >= floor) {
+        let fresh = eligible(phy, &seen, planet);
+        // Only lift the roll if something that rare can drop, new or owned;
+        // otherwise the pity keeps waiting.
+        let can_drop = |t: Tier| {
+            fresh
+                .iter()
+                .chain(&owned)
+                .any(|&i| phy.taxa[i].eco.tier >= t)
+        };
+        if tier < floor && can_drop(floor) {
             tier = floor;
         }
 
-        let card = match pick(phy, &pool, tier, planet, odds, rng) {
+        let wants_new = rng.chance(odds.discovery);
+        let new = if wants_new {
+            pick(phy, &fresh, tier, planet, rng)
+        } else {
+            None
+        };
+        let card = match new {
             Some(i) => {
                 seen[i] = true;
                 Card {
@@ -462,34 +452,31 @@ pub fn roll(
                 }
             }
             None => {
-                let i = specimen(phy, &seen, planet, rng);
+                let i = pick(phy, &owned, tier, planet, rng).unwrap_or(Phylogeny::ROOT);
+                // A new species was due but nothing new could live here.
+                let note = wants_new.then(|| {
+                    blocked_hint(phy, &seen, planet)
+                        .unwrap_or_else(|| "Nothing new could evolve here.".into())
+                });
                 Card {
                     taxon: i,
                     tier: phy.taxa[i].eco.tier,
                     morph: Morph::None,
                     new: false,
-                    note: blocked_hint(phy, &seen, planet)
-                        .or_else(|| Some("Nothing new could evolve here.".into())),
+                    note,
                 }
             }
         };
         cards.push(card);
     }
 
-    // In roll order: a new species boosts the morphs of the cards after it.
-    let mut seen_new = false;
     for c in cards.iter_mut() {
-        let extra = if seen_new { odds.after_new_morph } else { 0.0 };
-        c.morph = roll_morph(phy, c.taxon, planet, odds, extra, rng);
-        seen_new |= c.new;
+        c.morph = roll_morph(phy, c.taxon, planet, odds, rng);
     }
-    let morph_window = if pity.ever_morphed {
-        odds.morph_window
-    } else {
-        Some(FIRST_MORPH_PITY)
-    };
-    if cards.iter().all(|c| c.morph == Morph::None)
-        && morph_window.is_some_and(|w| pity.morph_ma + odds.ma >= w)
+    // A fresh player's first morph is guaranteed.
+    if !pity.ever_morphed
+        && cards.iter().all(|c| c.morph == Morph::None)
+        && pity.morph_ma + odds.ma >= FIRST_MORPH_PITY
     {
         if let Some(c) = cards.last_mut() {
             c.morph = Morph::Giant;
@@ -504,9 +491,6 @@ pub fn roll(
     pity.rare_ma = bump(pity.rare_ma, Tier::Rare);
     pity.epic_ma = bump(pity.epic_ma, Tier::Epic);
     pity.legendary_ma = bump(pity.legendary_ma, Tier::Legendary);
-    if cards.iter().all(|c| !c.new) {
-        pity.legendary_ma += odds.no_new_pity;
-    }
     if cards.iter().any(|c| c.morph != Morph::None) {
         pity.morph_ma = 0;
         pity.ever_morphed = true;
@@ -730,6 +714,73 @@ mod tests {
     }
 
     #[test]
+    fn discovery_decides_between_new_species_and_owned_ones() {
+        let (phy, found) = start();
+        let planet = Planet {
+            oxygen: 2,
+            ..Planet::default()
+        };
+        let draw = |discovery| {
+            let odds = Odds {
+                cards: 40,
+                discovery,
+                ..Odds::default()
+            };
+            roll(
+                &phy,
+                &found,
+                &planet,
+                &odds,
+                &mut Pity::default(),
+                &mut Rng::new(9),
+            )
+        };
+        let owned = draw(0.0);
+        assert!(
+            owned.iter().all(|c| !c.new && found[c.taxon]),
+            "all duplicates"
+        );
+        assert!(
+            owned.iter().all(|c| c.note.is_none()),
+            "none was due to be new"
+        );
+        let fresh = draw(1.0);
+        assert!(fresh.iter().any(|c| c.new));
+        // Once nothing new is left, a card due to be new says why it isn't.
+        assert!(fresh.iter().filter(|c| !c.new).all(|c| c.note.is_some()));
+    }
+
+    #[test]
+    fn morphs_stay_rare_whatever_stacks() {
+        assert!(morph_chance(1.0, 1.0) < 0.05, "a plain card");
+        assert_eq!(morph_chance(100.0, 3.0), MORPH_CHANCE_MAX);
+        // Rolled: even maxed out with arthropods at 35% oxygen, the cap holds.
+        let (phy, mut found) = start();
+        for n in ["Bilaterian", "Protostome", "Ecdysozoan", "Arthropod"] {
+            found[idx(&phy, n)] = true;
+        }
+        let planet = Planet {
+            oxygen: 5,
+            land: 1,
+            ..Planet::default()
+        };
+        let odds = Odds {
+            cards: 2000,
+            morph_mult: 100.0,
+            morph_rad: 3.0,
+            discovery: 0.0,
+            ..Odds::default()
+        };
+        let mut pity = Pity {
+            ever_morphed: true,
+            ..Pity::default()
+        };
+        let cards = roll(&phy, &found, &planet, &odds, &mut pity, &mut Rng::new(4));
+        let rate = cards.iter().filter(|c| c.morph != Morph::None).count() as f32 / 2000.0;
+        assert!(rate < MORPH_CHANCE_MAX + 0.03, "{rate}");
+    }
+
+    #[test]
     fn short_waits_reach_pity_no_sooner_than_long_ones() {
         let (phy, mut found) = start();
         for n in ["Bilaterian", "Deuterostome", "Chordate"] {
@@ -739,25 +790,33 @@ mod tests {
             oxygen: 3,
             ..Planet::default()
         };
-        // A fixed seed whose first genome rolls no Rare by itself.
         let odds = |ma| Odds {
             ma,
             ..Odds::default()
         };
         // 100 Ma short of the Rare pity: a 2h wait (20 Ma) doesn't reach
         // it, however many genomes it takes...
-        let mut pity = Pity {
+        let short = Pity {
             rare_ma: RARE_PITY - 100,
             ..Pity::default()
         };
-        roll(
-            &phy,
-            &found,
-            &planet,
-            &odds(20),
-            &mut pity,
-            &mut Rng::new(3),
-        );
+        // (a seed whose genome rolls no Rare by itself)
+        let mut pity = (1..)
+            .map(|seed| {
+                let mut p = short;
+                let cards = roll(
+                    &phy,
+                    &found,
+                    &planet,
+                    &odds(20),
+                    &mut p,
+                    &mut Rng::new(seed),
+                );
+                (p, tell(&cards))
+            })
+            .find(|(_, top)| *top < Tier::Rare)
+            .map(|(p, _)| p)
+            .unwrap();
         assert_eq!(pity.rare_ma, RARE_PITY - 80, "a 2h wait adds 20 Ma");
         // ...while one long wait does.
         let cards = roll(
@@ -811,56 +870,5 @@ mod tests {
         assert!((w.iter().sum::<f32>() - 100.0).abs() < 1e-3);
         assert_eq!(w, tier_weights(50.0), "radiation's ceiling");
         assert!(w[0] >= 10.0, "Common never vanishes");
-    }
-
-    #[test]
-    fn a_lure_pulls_its_clade() {
-        let (phy, mut found) = start();
-        for n in [
-            "Bilaterian",
-            "Protostome",
-            "Deuterostome",
-            "Ecdysozoan",
-            "Spiralian",
-            "Echinoderm",
-        ] {
-            found[idx(&phy, n)] = true;
-        }
-        let planet = Planet {
-            oxygen: 3,
-            land: 1,
-            ..Planet::default()
-        };
-        let ecd = idx(&phy, "Ecdysozoan");
-        let (mut lured, mut plain) = (0, 0);
-        for s in 0..400 {
-            let odds = Odds {
-                lure: Some(ecd),
-                cards: 1,
-                ..Odds::default()
-            };
-            let c = &roll(
-                &phy,
-                &found,
-                &planet,
-                &odds,
-                &mut Pity::default(),
-                &mut Rng::new(s + 1),
-            )[0];
-            lured += is_under(&phy, c.taxon, ecd) as u32;
-            let c = &roll(
-                &phy,
-                &found,
-                &planet,
-                &Odds {
-                    cards: 1,
-                    ..Odds::default()
-                },
-                &mut Pity::default(),
-                &mut Rng::new(s + 1),
-            )[0];
-            plain += is_under(&phy, c.taxon, ecd) as u32;
-        }
-        assert!(lured > plain, "lure {lured} vs plain {plain}");
     }
 }

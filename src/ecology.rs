@@ -8,7 +8,6 @@
 use serde::{Deserialize, Serialize};
 
 use crate::planet::{Biome, Habitat, Planet, Ranges};
-use crate::tree::Group;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Serialize, Deserialize)]
 pub enum Tier {
@@ -64,122 +63,68 @@ impl Tier {
     }
 }
 
-/// What a keystone adds; scaled by tier units x level x morph, then by its
-/// `Rule`.
-#[derive(Clone, Copy, PartialEq, Debug)]
+/// What a keystone adds, scaled by its strength (tier units x level x
+/// morph), then by its `Rule`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Bonus {
     Luck,
     Cards,
+    /// A better chance that a card is a species never found.
+    Discovery,
     Morph,
     Quick,
-    /// +1 adjustment point (not scaled).
+    /// +1 adjustment point per 4h waited (not scaled).
     Point,
-    /// +1 vegetation per cycle (not scaled).
-    Soil,
-    /// Duplicates count double towards specimen levels.
-    DoubleSpecimens,
-    /// More finds in this habitat.
-    Share(Habitat),
-    /// Luck, and the Legendary pity shrinks from 1600 Ma to 1200.
-    LivingFossil,
-    /// Morphs, and a morph is guaranteed at least once every 280 Ma.
-    Oddity,
 }
 
 impl Bonus {
-    pub fn describe(self) -> String {
-        match self {
-            Bonus::Luck => "Better rarity odds".into(),
-            Bonus::Cards => "Chance of +1 card".into(),
-            Bonus::Morph => "More morphs".into(),
-            Bonus::Quick => "Shorter wait".into(),
-            Bonus::Point => "+1 adjustment point per 4h waited".into(),
-            Bonus::Soil => "+1 vegetation each cycle".into(),
-            Bonus::DoubleSpecimens => "Duplicates count double".into(),
-            Bonus::Share(h) => format!("More {} finds", h.name().to_lowercase()),
-            Bonus::LivingFossil => "Luck; a Legendary within 1200 Ma".into(),
-            Bonus::Oddity => "More morphs; one every 280 Ma".into(),
-        }
-    }
-}
-
-/// A planet condition some rules wait for.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Cond {
-    /// Snowball or Cold.
-    Cold,
-    /// Temperate or warmer.
-    Warm,
-    /// Oxygen at 35%.
-    MaxOxygen,
-    /// Volcanism 1 or more.
-    Volcanic,
-    /// Vegetation 1 or less.
-    Bare,
-    /// The planet has forest.
-    Forest,
-    /// Fresh water covers at least a fifth of the planet.
-    FreshWater,
-    In(Biome),
-}
-
-impl Cond {
-    pub fn holds(self, p: &Planet) -> bool {
-        match self {
-            Cond::Cold => p.temperature <= 1,
-            Cond::Warm => p.temperature >= 3,
-            Cond::MaxOxygen => p.oxygen >= 5,
-            Cond::Volcanic => p.volcanism >= 1,
-            Cond::Bare => p.vegetation <= 1,
-            Cond::Forest => p.has(Habitat::Forest),
-            Cond::FreshWater => p.habitat_shares()[Habitat::Fresh.index()] >= 0.2,
-            Cond::In(b) => b.ranges().contains(p),
-        }
-    }
+    /// In the order the keystones screen sorts them.
+    pub const ALL: [Bonus; 6] = [
+        Bonus::Luck,
+        Bonus::Cards,
+        Bonus::Discovery,
+        Bonus::Morph,
+        Bonus::Quick,
+        Bonus::Point,
+    ];
 
     pub fn describe(self) -> String {
         match self {
-            Cond::Cold => "at Snowball or Cold".into(),
-            Cond::Warm => "at Temperate or warmer".into(),
-            Cond::MaxOxygen => "at 35% oxygen".into(),
-            Cond::Volcanic => "with volcanoes".into(),
-            Cond::Bare => "on bare ground".into(),
-            Cond::Forest => "with forest".into(),
-            Cond::FreshWater => "with 20%+ fresh water".into(),
-            Cond::In(b) => format!("in the {}", b.name()),
+            Bonus::Luck => "Better rarity odds",
+            Bonus::Cards => "Chance of +1 card",
+            Bonus::Discovery => "More new species",
+            Bonus::Morph => "More morphs",
+            Bonus::Quick => "Shorter wait",
+            Bonus::Point => "+1 adjustment point per 4h waited",
         }
+        .into()
     }
 }
 
-/// Keystones that work together.
+/// The kind of keystone a copier copies.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Team {
-    /// Cow, Pig, Chicken, Horse.
-    Farm,
-    /// Cnidarian, Jellyfish, Coral.
-    Cnidarians,
-    /// Bee, Butterfly.
-    Pollinators,
-    /// Every fish.
+pub enum Kin {
     Fish,
+    Mammal,
+    Bird,
 }
 
-impl Team {
-    pub fn includes(self, name: &str, group: Group) -> bool {
-        match self {
-            Team::Farm => matches!(name, "Cow" | "Pig" | "Chicken" | "Horse"),
-            Team::Cnidarians => matches!(name, "Cnidarian" | "Jellyfish" | "Coral"),
-            Team::Pollinators => matches!(name, "Bee" | "Butterfly"),
-            Team::Fish => group == Group::Fish,
-        }
-    }
-
+impl Kin {
     pub fn name(self) -> &'static str {
         match self {
-            Team::Farm => "farm animal",
-            Team::Cnidarians => "cnidarian",
-            Team::Pollinators => "pollinator",
-            Team::Fish => "fish",
+            Kin::Fish => "fish",
+            Kin::Mammal => "mammal",
+            Kin::Bird => "bird",
+        }
+    }
+
+    /// The taxa of this kind: those under this node, minus `not_under`.
+    pub fn clade(self) -> (&'static str, Option<&'static str>) {
+        match self {
+            // Fish: the vertebrates that never came ashore.
+            Kin::Fish => ("Vertebrate", Some("Tetrapod")),
+            Kin::Mammal => ("Mammal", None),
+            Kin::Bird => ("Bird", None),
         }
     }
 }
@@ -187,18 +132,16 @@ impl Team {
 /// A legendary's strong effect and its drawback.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Catch {
-    /// +2 cards; plant-eater keystones fall asleep.
+    /// +2 cards; the keystone in the last slot falls asleep.
     Tyrant,
-    /// Doubles all luck; Temperature can't go below Temperate.
+    /// x2 all luck; Temperature can't go below Temperate.
     Apex,
-    /// x2 luck and +2 cards; a 4h wait has 1 in 5 to end the Earth instead.
-    Hubris,
     /// Morphs x3; one fewer boon to choose from.
     Feathers,
-    /// Legendary pity 1000 Ma; the wait is an hour longer.
-    Ancient,
-    /// Counts as every team; can't be copied.
-    Wildcard,
+    /// x2 luck and +2 cards; a 4h wait has 1 in 5 to end the Earth instead.
+    Hubris,
+    /// Every biome's bonus; the wait is 50% longer.
+    AllBiomes,
 }
 
 impl Catch {
@@ -206,63 +149,39 @@ impl Catch {
         match self {
             Catch::Tyrant => "+2 cards in every genome",
             Catch::Apex => "Doubles all Luck",
-            Catch::Hubris => "x2 Luck and +2 cards",
             Catch::Feathers => "Morphs x3",
-            Catch::Ancient => "A Legendary within 1000 Ma",
-            Catch::Wildcard => "Counts as every team; more morphs",
+            Catch::Hubris => "x2 Luck and +2 cards",
+            Catch::AllBiomes => "Every biome's bonus at once",
         }
     }
 
     pub fn drawback(self) -> &'static str {
         match self {
-            Catch::Tyrant => "Plant-eater keystones fall asleep",
+            Catch::Tyrant => "The keystone in the last slot falls asleep",
             Catch::Apex => "Temperature can't go below Temperate",
-            Catch::Hubris => "A 4h wait has 1 in 5 to end the Earth",
             Catch::Feathers => "One fewer boon to choose from",
-            Catch::Ancient => "The wait is an hour longer",
-            Catch::Wildcard => "Can't be copied",
+            Catch::Hubris => "A 4h wait has 1 in 5 to end the Earth",
+            Catch::AllBiomes => "The wait is 50% longer",
         }
     }
 }
 
 /// When and how much a keystone's `Bonus` pays.
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Rule {
     Flat,
-    /// x2 while the condition holds.
-    DoubleWhen(Cond),
-    /// Nothing unless the condition holds.
-    OnlyWhen(Cond),
-    /// A charge for each cycle run with the condition holding (half the
-    /// bonus each); one without it empties them.
-    Grows(Cond),
-    /// A charge for each cycle run on exactly the previous cycle's planet.
-    Stasis,
-    /// Half the bonus for each other keystone of the team.
-    PerTeam(Team),
-    /// x2 with a keystone of the team.
-    DoubleWith(Team),
-    /// x3, then leaves its slot after this many cycles.
-    Fragile(u8),
-    /// A charge per duplicate (up to 3), each a third of a card.
-    Duplicates,
+    /// Copies the keystone in the slot above, if of this kin and not a
+    /// Legendary.
+    Copy(Kin),
     /// Never asleep; +2 luck per lever at its lowest or highest.
     Extremes,
-    CopyAbove,
-    /// Copies the keystone below it if that one is a mammal.
-    CopyBelowMammal,
-    /// Copies the strongest other keystone at half strength.
-    CopyStrongest,
-    /// After a Rare+ card, the next card is luckier.
-    AfterRare,
-    /// After a new species, the next cards morph more.
-    AfterNew,
-    /// Each duplicate gives a random keystone +1 specimen.
-    Feed,
-    /// A genome with nothing new brings the Legendary pity 80 Ma closer.
-    NoNewPity,
-    /// Giant morphs x3 while the condition holds.
-    GiantWhen(Cond),
+    /// x3, but asleep after a cycle (a duplicate wakes it).
+    Fragile,
+    /// A charge per 40 Ma waited on a planet changed since the wait before
+    /// (half the bonus each); a wait on the same planet empties them.
+    Changing,
+    /// The opposite: charges while the planet stays exactly the same.
+    Stasis,
     Catch(Catch),
 }
 
@@ -272,47 +191,57 @@ impl Rule {
         let b = bonus.describe();
         match self {
             Rule::Flat => b,
-            Rule::DoubleWhen(c) => format!("{b}; x2 {}", c.describe()),
-            Rule::OnlyWhen(c) => format!("{b}, only {}", c.describe()),
-            Rule::Grows(c) => format!("{b}, growing each cycle {}", c.describe()),
-            Rule::Stasis => format!("{b}, growing while the planet stays the same"),
-            Rule::PerTeam(t) => format!("{b} for each other {} keystone", t.name()),
-            Rule::DoubleWith(t) => format!("{b}; x2 with a {} keystone", t.name()),
-            Rule::Fragile(n) => format!("{b} x3, then it leaves after {n} cycles"),
-            Rule::Duplicates => "Each duplicate: +1/3 card, up to 1".into(),
+            Rule::Copy(k) => format!(
+                "Copies the {} keystone above it (not a Legendary)",
+                k.name()
+            ),
             Rule::Extremes => "Never asleep; +2 Luck per lever at its min or max".into(),
-            Rule::CopyAbove => "Copies the keystone above it".into(),
-            Rule::CopyBelowMammal => "Copies the keystone below it, if a mammal".into(),
-            Rule::CopyStrongest => "Copies the strongest keystone at half".into(),
-            Rule::AfterRare => "After a Rare or better card, the next is luckier".into(),
-            Rule::AfterNew => "After a new species, the next cards morph more".into(),
-            Rule::Feed => "Each duplicate feeds a keystone a specimen".into(),
-            Rule::NoNewPity => "Nothing new? A Legendary comes sooner".into(),
-            Rule::GiantWhen(c) => format!("Giant morphs x3 {}", c.describe()),
+            Rule::Fragile => format!("{b} x3"),
+            Rule::Changing => format!("{b}, growing while the planet changes every cycle"),
+            Rule::Stasis => format!("{b}, growing while the planet stays the same"),
             Rule::Catch(c) => c.perk().into(),
+        }
+    }
+
+    /// The catch that comes with it, shown in red after "But:".
+    pub fn drawback(self) -> Option<&'static str> {
+        match self {
+            Rule::Fragile => Some("Falls asleep after one cycle"),
+            Rule::Changing => Some("Morphs are halved"),
+            Rule::Stasis => Some("15% fewer new species"),
+            Rule::Catch(c) => Some(c.drawback()),
+            _ => None,
         }
     }
 }
 
-/// Plant eaters: asleep while a T. rex is a keystone.
-pub fn is_herbivore(name: &str) -> bool {
-    matches!(
-        name,
-        "Sauropod"
-            | "Triceratops"
-            | "Mammoth"
-            | "Elephant"
-            | "Giraffe"
-            | "Horse"
-            | "Cow"
-            | "Rabbit"
-            | "Koala"
-            | "Sloth"
-            | "Giant Panda"
-            | "Rhino"
-            | "Hippo"
-            | "Kangaroo"
-    )
+/// Keystones of one biome that unlock its bonus.
+pub const BIOME_SET: usize = 3;
+
+/// What `BIOME_SET` keystones of a biome add together.
+pub fn biome_bonus(b: Biome) -> (Bonus, f32) {
+    match b {
+        Biome::Primordial => (Bonus::Discovery, 0.15),
+        Biome::Reef => (Bonus::Morph, 0.5),
+        Biome::IceAge => (Bonus::Quick, 0.15),
+        Biome::CoalSwamp => (Bonus::Cards, 1.0),
+        Biome::Jungle => (Bonus::Luck, 5.0),
+        Biome::Savanna => (Bonus::Point, 1.0),
+        Biome::Hothouse => (Bonus::Cards, 1.0),
+    }
+}
+
+/// "+5 luck", for the biome guide.
+pub fn biome_bonus_label(b: Biome) -> String {
+    let (bonus, x) = biome_bonus(b);
+    match bonus {
+        Bonus::Luck => format!("+{x:.0} luck"),
+        Bonus::Cards => format!("+{x:.0} card"),
+        Bonus::Discovery => format!("+{:.0}% discovery", x * 100.0),
+        Bonus::Morph => format!("+{:.0}% morphs", x * 100.0),
+        Bonus::Quick => format!("-{:.0}% wait", x * 100.0),
+        Bonus::Point => format!("+{x:.0} point per 4h"),
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -428,157 +357,157 @@ use Rule as R;
 
 #[rustfmt::skip]
 const TABLE: &[(&str, Needs, Tier, Bonus, Rule)] = &[
-    ("Urmetazoan",       n(SEA, 0),                         Common,    B::Luck,            R::Flat),
-    ("Sea Sponge",       b(Primordial, SEA),                Common,    B::Luck,            R::Flat),
-    ("Comb Jelly",       b(Primordial, SEA),                Common,    B::Share(Sea),      R::Flat),
-    ("Placozoan",        b(Primordial, SEA),                Uncommon,  B::Morph,           R::Flat),
-    ("Cnidarian",        n(SEA, 1),                         Common,    B::Share(Sea),      R::Flat),
-    ("Jellyfish",        t(n(SEA, 1), 0, 2),                Common,    B::Morph,           R::Flat),
-    ("Coral",            b(Biome::Reef, REEF),              Uncommon,  B::Luck,            R::Grows(Cond::Warm)),
-    ("Bilaterian",       n(SEA, 2),                         Common,    B::Cards,           R::Flat),
-    ("Acoel Worm",       b(Primordial, SEA),                Common,    B::Quick,           R::Flat),
-    ("Protostome",       n(SEA, 2),                         Common,    B::Luck,            R::Flat),
-    ("Deuterostome",     n(SEA, 2),                         Uncommon,  B::Luck,            R::Flat),
-    ("Spiralian",        n(SEA, 2),                         Common,    B::Share(Shore),    R::Flat),
-    ("Ecdysozoan",       n(SEA, 2),                         Common,    B::Morph,           R::Flat),
-    ("Flatworm",         t(n(FRESH, 2), 1, 2),              Common,    B::Cards,           R::Flat),
-    ("Mollusc",          n(SEA, 2),                         Uncommon,  B::Share(Reef),     R::Flat),
-    ("Snail",            t(n(SHORE, 2), 3, 5),              Common,    B::Quick,           R::Flat),
-    ("Octopus",          b(Biome::Reef, REEF),              Epic,      B::Luck,            R::CopyAbove),
-    ("Segmented Worm",   v(n(LAND, 2), 1, 4),               Uncommon,  B::Soil,            R::Flat),
-    ("Nematode",         n(SEA_OR_LAND, 1),                 Common,    B::Quick,           R::Flat),
-    ("Arthropod",        n(SEA, 2),                         Uncommon,  B::Morph,           R::Flat),
-    ("Chelicerate",      n(SHORE, 2),                       Uncommon,  B::Share(Land),     R::Flat),
-    ("Horseshoe Crab",   t(n(SHORE, 2), 2, 4),              Rare,      B::Luck,            R::NoNewPity),
-    ("Scorpion",         b(CoalSwamp, LAND),                Rare,      B::Share(Land),     R::Flat),
-    ("Spider",           b(CoalSwamp, FOREST),              Rare,      B::Cards,           R::Feed),
-    ("Pancrustacean",    n(SEA, 2),                         Common,    B::Share(Shore),    R::Flat),
-    ("Crab",             t(n(SHORE, 2), 3, 5),              Uncommon,  B::Share(Shore),    R::Flat),
-    ("Insect",           v(n(LAND, 3), 2, 5),               Uncommon,  B::Share(Forest),   R::Flat),
-    ("Dragonfly",        b(CoalSwamp, FRESH),               Rare,      B::Morph,           R::GiantWhen(Cond::MaxOxygen)),
-    ("Beetle",           b(CoalSwamp, FOREST),              Uncommon,  B::Cards,           R::Flat),
-    ("Butterfly",        b(Jungle, FOREST),                 Rare,      B::Cards,           R::DoubleWith(Team::Pollinators)),
-    ("Ant",              t(n(FOREST, 0), 3, 5),             Epic,      B::Cards,           R::OnlyWhen(Cond::MaxOxygen)),
-    ("Echinoderm",       n(SEA, 2),                         Common,    B::Share(Reef),     R::Flat),
-    ("Starfish",         n(SHORE, 2),                       Common,    B::Cards,           R::Duplicates),
-    ("Sea Urchin",       b(Biome::Reef, REEF),              Uncommon,  B::Share(Reef),     R::Flat),
-    ("Chordate",         n(SEA, 2),                         Uncommon,  B::Luck,            R::Flat),
-    ("Sea Squirt",       t(n(SEA, 2), 0, 2),                Common,    B::Quick,           R::Flat),
-    ("Vertebrate",       n(SEA, 3),                         Rare,      B::Luck,            R::Flat),
-    ("Lamprey",          t(n(SEA_OR_FRESH, 2), 0, 2),       Uncommon,  B::Share(Fresh),    R::Flat),
-    ("Jawed Fish",       n(SEA, 3),                         Uncommon,  B::Cards,           R::Flat),
-    ("Shark",            ocean(n(SEA, 3)),                  Rare,      B::Luck,            R::PerTeam(Team::Fish)),
-    ("Ray-finned Fish",  n(SEA_OR_FRESH, 2),                Common,    B::Cards,           R::Flat),
-    ("Lobe-finned Fish", n(FRESH, 2),                       Rare,      B::Share(Fresh),    R::Flat),
-    ("Coelacanth",       t(n(SEA, 2), 0, 2),                Legendary, B::Luck,            R::Stasis),
-    ("Tetrapod",         v(n(SHORE_OR_FRESH, 2), 2, 5),     Epic,      B::Share(Land),     R::Flat),
-    ("Amphibian",        v(t(n(FRESH, 0), 2, 5), 2, 5),     Uncommon,  B::Share(Fresh),    R::Flat),
-    ("Frog",             b(Jungle, FRESH),                  Common,    B::Morph,           R::Flat),
-    ("Amniote",          v(n(LAND, 0), 2, 5),               Rare,      B::Share(Land),     R::Flat),
-    ("Mammal",           fur(v(t(n(LAND, 0), 1, 5), 2, 5)), Rare,      B::Luck,            R::Flat),
-    ("Platypus",         t(n(FRESH, 0), 0, 2),              Legendary, B::Oddity,          R::Catch(Catch::Wildcard)),
-    ("Marsupial",        fur(n(LAND, 0)),                   Uncommon,  B::Morph,           R::Flat),
-    ("Placental",        fur(v(n(LAND, 0), 2, 5)),          Epic,      B::Cards,           R::Flat),
-    ("Afrothere",        fur(t(n(LAND, 0), 3, 5)),          Uncommon,  B::Cards,           R::Flat),
-    ("Mouse",            fur(n(LAND, 0)),                   Common,    B::Quick,           R::Flat),
-    ("Bat",              fur(t(n(FOREST, 3), 2, 5)),        Rare,      B::Morph,           R::AfterNew),
-    ("Carnivoran",       fur(n(LAND, 0)),                   Uncommon,  B::Luck,            R::Flat),
-    ("Cetartiodactyl",   fur(n(LAND, 0)),                   Uncommon,  B::Share(Land),     R::Flat),
-    ("Primate",          fur(t(n(FOREST, 0), 3, 5)),        Rare,      B::Share(Forest),   R::Flat),
-    ("Lemur",            b(Jungle, FOREST),                 Uncommon,  B::Morph,           R::Flat),
-    ("Monkey",           fur(t(n(FOREST, 0), 3, 5)),        Rare,      B::Cards,           R::Flat),
-    ("Ape",              fur(t(n(FOREST, 0), 3, 5)),        Epic,      B::Luck,            R::Flat),
-    ("Chimpanzee",       b(Jungle, FOREST),                 Epic,      B::Luck,            R::CopyBelowMammal),
-    ("Human",            b(Savanna, LAND),                  Legendary, B::Luck,            R::Catch(Catch::Hubris)),
-    ("Reptile",          t(n(LAND, 0), 3, 5),               Uncommon,  B::Share(Land),     R::Flat),
-    ("Turtle",           t(n(SHORE, 0), 3, 5),              Uncommon,  B::DoubleSpecimens, R::Flat),
-    ("Lizard",           v(t(n(LAND, 0), 3, 5), 0, 3),      Common,    B::Luck,            R::OnlyWhen(Cond::Bare)),
-    ("Crocodile",        t(n(FRESH, 0), 4, 5),              Rare,      B::Cards,           R::OnlyWhen(Cond::FreshWater)),
-    ("Dinosaur",         v(t(n(LAND, 0), 3, 5), 2, 5),      Epic,      B::Cards,           R::Flat),
-    ("Bird",             n(FOREST, 3),                      Epic,      B::Luck,            R::Flat),
-    ("Clam",             b(Biome::Reef, REEF),              Common,    B::DoubleSpecimens, R::Flat),
-    ("Squid",            ocean(t(n(SEA, 3), 0, 2)),         Uncommon,  B::Cards,           R::Flat),
-    ("Ammonite",         ocean(t(n(SEA, 2), 3, 5)),         Rare,      B::Luck,            R::Flat),
-    ("Earthworm",        v(n(LAND, 2), 2, 5),               Common,    B::Soil,            R::Flat),
-    ("Tardigrade",       n(SEA_OR_LAND, 0),                 Epic,      B::Luck,            R::Extremes),
-    ("Trilobite",        b(Primordial, SEA),                Uncommon,  B::Share(Sea),      R::Flat),
-    ("Anomalocaris",     b(Primordial, SEA),                Epic,      B::Luck,            R::Flat),
-    ("Centipede",        b(CoalSwamp, FOREST),              Common,    B::Quick,           R::Flat),
-    ("Shrimp",           ocean(n(SEA, 2)),                  Common,    B::Cards,           R::Flat),
-    ("Bee",              t(v(n(FOREST, 3), 3, 5), 2, 5),    Uncommon,  B::Luck,            R::Grows(Cond::Forest)),
-    ("Meganeura",        b(CoalSwamp, FRESH),               Epic,      B::Morph,           R::GiantWhen(Cond::MaxOxygen)),
-    ("Dunkleosteus",     ocean(t(n(SEA, 3), 3, 5)),         Epic,      B::Luck,            R::Flat),
-    ("Stingray",         ocean(t(n(SEA, 3), 3, 5)),         Uncommon,  B::Share(Sea),      R::Flat),
-    ("Megalodon",        ocean(t(n(SEA, 3), 3, 5)),         Legendary, B::Luck,            R::Catch(Catch::Apex)),
-    ("Seahorse",         b(Biome::Reef, REEF),              Rare,      B::Morph,           R::Flat),
-    ("Anglerfish",       ocean(t(n(SEA, 2), 0, 2)),         Rare,      B::Luck,            R::Flat),
-    ("Tiktaalik",        n(SHORE_OR_FRESH, 3),              Rare,      B::Share(Shore),    R::Flat),
-    ("Salamander",       t(n(FRESH, 0), 1, 2),              Common,    B::Quick,           R::Flat),
-    ("Snake",            t(n(LAND, 0), 3, 5),               Uncommon,  B::Luck,            R::Flat),
-    ("Pterosaur",        b(Hothouse, SHORE),                Epic,      B::Share(Shore),    R::Flat),
-    ("T. rex",           b(Hothouse, LAND),                 Legendary, B::Cards,           R::Catch(Catch::Tyrant)),
-    ("Sauropod",         b(Hothouse, FOREST),               Epic,      B::Cards,           R::Grows(Cond::In(Hothouse))),
-    ("Penguin",          t(n(SHORE, 0), 0, 2),              Rare,      B::Luck,            R::DoubleWhen(Cond::Cold)),
-    ("Mammoth",          b(IceAge, LAND),                   Epic,      B::Cards,           R::Flat),
-    ("Rabbit",           fur(v(n(LAND, 0), 1, 4)),          Common,    B::DoubleSpecimens, R::Flat),
-    ("Horse",            v(t(n(LAND, 0), 1, 4), 1, 3),      Uncommon,  B::Luck,            R::PerTeam(Team::Farm)),
-    ("Dolphin",          ocean(fur(t(n(SEA, 0), 3, 5))),    Rare,      B::Cards,           R::Flat),
-    ("Lion",             b(Savanna, LAND),                  Rare,      B::Luck,            R::Flat),
-    ("Gorilla",          b(Jungle, FOREST),                 Rare,      B::Point,           R::Flat),
-    ("Nautilus",         b(Biome::Reef, REEF),              Rare,      B::LivingFossil,    R::Flat),
-    ("Fly",              n(LAND, 2),                        Common,    B::Quick,           R::Flat),
-    ("Clownfish",        b(Biome::Reef, REEF),              Common,    B::Share(Reef),     R::DoubleWith(Team::Cnidarians)),
-    ("Lungfish",         t(n(FRESH, 2), 3, 5),              Rare,      B::Share(Fresh),    R::Flat),
-    ("Pig",              fur(v(n(LAND, 0), 1, 5)),          Uncommon,  B::Luck,            R::PerTeam(Team::Farm)),
-    ("Tuatara",          t(n(FOREST, 0), 1, 2),             Legendary, B::Luck,            R::Catch(Catch::Ancient)),
-    ("Sea Turtle",       b(Biome::Reef, SEA),               Rare,      B::DoubleSpecimens, R::Flat),
-    ("Plesiosaur",       b(Hothouse, SEA),                  Epic,      B::Cards,           R::Flat),
-    ("Ichthyosaur",      b(Hothouse, SEA),                  Epic,      B::Luck,            R::Flat),
-    ("Triceratops",      b(Hothouse, LAND),                 Epic,      B::Point,           R::Flat),
-    ("Velociraptor",     b(Hothouse, LAND),                 Rare,      B::Quick,           R::Flat),
-    ("Archaeopteryx",    t(n(FOREST, 3), 3, 5),             Legendary, B::Morph,           R::Catch(Catch::Feathers)),
-    ("Ostrich",          b(Savanna, LAND),                  Rare,      B::Luck,            R::OnlyWhen(Cond::Bare)),
-    ("Parrot",           b(Jungle, FOREST),                 Epic,      B::Luck,            R::CopyStrongest),
-    ("Owl",              t(n(FOREST, 0), 0, 2),             Uncommon,  B::Luck,            R::AfterRare),
-    ("Koala",            fur(t(n(FOREST, 0), 3, 5)),        Uncommon,  B::Soil,            R::Flat),
-    ("Sloth",            b(Jungle, FOREST),                 Uncommon,  B::DoubleSpecimens, R::Flat),
-    ("Giraffe",          b(Savanna, LAND),                  Rare,      B::Cards,           R::Flat),
-    ("Hippo",            fur(t(n(FRESH, 0), 3, 5)),         Rare,      B::Cards,           R::OnlyWhen(Cond::FreshWater)),
-    ("Rhino",            b(Savanna, LAND),                  Epic,      B::Luck,            R::Flat),
-    ("Bear",             t(n(FOREST, 0), 0, 2),             Rare,      B::Point,           R::Flat),
-    ("Seal",             b(IceAge, SHORE),                  Uncommon,  B::Share(Shore),    R::Flat),
-    ("Synapsid",         n(LAND, 2),                        Uncommon,  B::Luck,            R::Flat),
-    ("Archosaur",        t(n(LAND, 2), 3, 5),               Uncommon,  B::Share(Land),     R::Flat),
-    ("Theropod",         t(n(LAND, 3), 3, 5),               Rare,      B::Cards,           R::Flat),
-    ("Hominin",          fur(v(t(n(LAND, 3), 2, 4), 1, 5)), Epic,      B::Luck,            R::Flat),
-    ("Perissodactyl",    fur(n(LAND, 0)),                   Uncommon,  B::Quick,           R::Flat),
-    ("Spiny-rayed Fish", t(n(SEA, 2), 3, 5),                Common,    B::Cards,           R::Flat),
-    ("Elephant",         b(Savanna, LAND),                  Epic,      B::Point,           R::Flat),
-    ("Whale",            t(n(SEA, 0), 0, 2),                Epic,      B::Share(Sea),      R::Flat),
-    ("Wolf",             t(n(LAND, 0), 0, 2),               Rare,      B::Luck,            R::DoubleWhen(Cond::Cold)),
-    ("Dog",              fur(n(LAND, 0)),                   Uncommon,  B::Luck,            R::DoubleWith(Team::Farm)),
-    ("Kangaroo",         b(Savanna, LAND),                  Rare,      B::Share(Land),     R::Flat),
-    ("Tiger",            fur(t(n(FOREST, 0), 0, 2)),        Epic,      B::Luck,            R::Flat),
-    ("Cat",              fur(n(LAND, 0)),                   Common,    B::Morph,           R::Flat),
-    ("Sabre-tooth",      b(IceAge, LAND),                   Epic,      B::Cards,           R::Flat),
-    ("Giant Panda",      v(t(n(FOREST, 0), 1, 2), 3, 5),    Epic,      B::DoubleSpecimens, R::Flat),
-    ("Cow",              fur(v(n(LAND, 0), 1, 4)),          Common,    B::Luck,            R::PerTeam(Team::Farm)),
-    ("Chicken",          fur(n(LAND, 0)),                   Common,    B::Luck,            R::PerTeam(Team::Farm)),
-    ("Songbird",         fur(n(FOREST, 0)),                 Common,    B::Quick,           R::Flat),
-    ("Dodo",             b(Jungle, FOREST),                 Legendary, B::Luck,            R::Fragile(3)),
-    ("True Bug",         t(n(LAND, 2), 3, 5),               Common,    B::Quick,           R::Flat),
-    ("Wasp",             v(t(n(LAND, 3), 3, 5), 1, 5),      Uncommon,  B::Luck,            R::Flat),
-    ("Mite",             n(SEA_OR_LAND, 1),                 Common,    B::DoubleSpecimens, R::Flat),
-    ("Termite",          b(Jungle, FOREST),                 Uncommon,  B::Soil,            R::Flat),
-    ("Moss Animal",      b(Primordial, SEA),                Common,    B::Share(Sea),      R::Flat),
-    ("Brittle Star",     b(Primordial, SEA),                Common,    B::Quick,           R::Flat),
-    ("Carp",             t(n(FRESH, 2), 1, 2),              Common,    B::DoubleSpecimens, R::Flat),
-    ("Dickinsonia",      b(Primordial, SEA),                Rare,      B::Oddity,          R::Flat),
-    ("Dimetrodon",       t(n(LAND, 2), 3, 5),               Rare,      B::Quick,           R::OnlyWhen(Cond::Volcanic)),
-    ("Lucy",             b(Savanna, LAND),                  Epic,      B::Point,           R::Flat),
-    ("Neanderthal",      b(IceAge, LAND),                   Epic,      B::Luck,            R::Flat),
-    ("Pakicetus",        fur(t(n(SHORE, 0), 3, 5)),         Rare,      B::Share(Shore),    R::Flat),
-    ("Acanthostega",     b(CoalSwamp, FRESH),               Rare,      B::Share(Fresh),    R::Flat),
+    ("Urmetazoan",       n(SEA, 0),                         Common,    B::Luck,      R::Flat),
+    ("Sea Sponge",       b(Primordial, SEA),                Common,    B::Luck,      R::Flat),
+    ("Comb Jelly",       b(Primordial, SEA),                Common,    B::Discovery, R::Flat),
+    ("Placozoan",        b(Primordial, SEA),                Uncommon,  B::Morph,     R::Flat),
+    ("Cnidarian",        n(SEA, 1),                         Common,    B::Discovery, R::Flat),
+    ("Jellyfish",        t(n(SEA, 1), 0, 2),                Common,    B::Morph,     R::Flat),
+    ("Coral",            b(Biome::Reef, REEF),              Uncommon,  B::Luck,      R::Flat),
+    ("Bilaterian",       n(SEA, 2),                         Common,    B::Cards,     R::Flat),
+    ("Acoel Worm",       b(Primordial, SEA),                Common,    B::Quick,     R::Flat),
+    ("Protostome",       n(SEA, 2),                         Common,    B::Luck,      R::Flat),
+    ("Deuterostome",     n(SEA, 2),                         Uncommon,  B::Luck,      R::Flat),
+    ("Spiralian",        n(SEA, 2),                         Common,    B::Discovery, R::Flat),
+    ("Ecdysozoan",       n(SEA, 2),                         Common,    B::Morph,     R::Flat),
+    ("Flatworm",         t(n(FRESH, 2), 1, 2),              Common,    B::Cards,     R::Flat),
+    ("Mollusc",          n(SEA, 2),                         Uncommon,  B::Discovery, R::Flat),
+    ("Snail",            t(n(SHORE, 2), 3, 5),              Common,    B::Quick,     R::Flat),
+    ("Octopus",          b(Biome::Reef, REEF),              Epic,      B::Luck,      R::Copy(Kin::Fish)),
+    ("Segmented Worm",   v(n(LAND, 2), 1, 4),               Uncommon,  B::Point,     R::Flat),
+    ("Nematode",         n(SEA_OR_LAND, 1),                 Common,    B::Quick,     R::Flat),
+    ("Arthropod",        n(SEA, 2),                         Uncommon,  B::Morph,     R::Flat),
+    ("Chelicerate",      n(SHORE, 2),                       Uncommon,  B::Discovery, R::Flat),
+    ("Horseshoe Crab",   t(n(SHORE, 2), 2, 4),              Rare,      B::Luck,      R::Flat),
+    ("Scorpion",         b(CoalSwamp, LAND),                Rare,      B::Discovery, R::Flat),
+    ("Spider",           b(CoalSwamp, FOREST),              Rare,      B::Cards,     R::Flat),
+    ("Pancrustacean",    n(SEA, 2),                         Common,    B::Discovery, R::Flat),
+    ("Crab",             t(n(SHORE, 2), 3, 5),              Uncommon,  B::Discovery, R::Flat),
+    ("Insect",           v(n(LAND, 3), 2, 5),               Uncommon,  B::Discovery, R::Flat),
+    ("Dragonfly",        b(CoalSwamp, FRESH),               Rare,      B::Morph,     R::Flat),
+    ("Beetle",           b(CoalSwamp, FOREST),              Uncommon,  B::Cards,     R::Flat),
+    ("Butterfly",        b(Jungle, FOREST),                 Rare,      B::Cards,     R::Flat),
+    ("Ant",              t(n(FOREST, 0), 3, 5),             Epic,      B::Cards,     R::Flat),
+    ("Echinoderm",       n(SEA, 2),                         Common,    B::Discovery, R::Flat),
+    ("Starfish",         n(SHORE, 2),                       Common,    B::Cards,     R::Flat),
+    ("Sea Urchin",       b(Biome::Reef, REEF),              Uncommon,  B::Discovery, R::Flat),
+    ("Chordate",         n(SEA, 2),                         Uncommon,  B::Luck,      R::Flat),
+    ("Sea Squirt",       t(n(SEA, 2), 0, 2),                Common,    B::Quick,     R::Flat),
+    ("Vertebrate",       n(SEA, 3),                         Rare,      B::Luck,      R::Flat),
+    ("Lamprey",          t(n(SEA_OR_FRESH, 2), 0, 2),       Uncommon,  B::Discovery, R::Flat),
+    ("Jawed Fish",       n(SEA, 3),                         Uncommon,  B::Cards,     R::Flat),
+    ("Shark",            ocean(n(SEA, 3)),                  Rare,      B::Luck,      R::Flat),
+    ("Ray-finned Fish",  n(SEA_OR_FRESH, 2),                Common,    B::Cards,     R::Flat),
+    ("Lobe-finned Fish", n(FRESH, 2),                       Rare,      B::Discovery, R::Flat),
+    ("Coelacanth",       t(n(SEA, 2), 0, 2),                Legendary, B::Luck,      R::Stasis),
+    ("Tetrapod",         v(n(SHORE_OR_FRESH, 2), 2, 5),     Epic,      B::Discovery, R::Flat),
+    ("Amphibian",        v(t(n(FRESH, 0), 2, 5), 2, 5),     Uncommon,  B::Discovery, R::Flat),
+    ("Frog",             b(Jungle, FRESH),                  Common,    B::Morph,     R::Flat),
+    ("Amniote",          v(n(LAND, 0), 2, 5),               Rare,      B::Discovery, R::Flat),
+    ("Mammal",           fur(v(t(n(LAND, 0), 1, 5), 2, 5)), Rare,      B::Luck,      R::Flat),
+    ("Platypus",         t(n(FRESH, 0), 0, 2),              Legendary, B::Luck,      R::Catch(Catch::AllBiomes)),
+    ("Marsupial",        fur(n(LAND, 0)),                   Uncommon,  B::Morph,     R::Flat),
+    ("Placental",        fur(v(n(LAND, 0), 2, 5)),          Epic,      B::Cards,     R::Flat),
+    ("Afrothere",        fur(t(n(LAND, 0), 3, 5)),          Uncommon,  B::Cards,     R::Flat),
+    ("Mouse",            fur(n(LAND, 0)),                   Common,    B::Quick,     R::Flat),
+    ("Bat",              fur(t(n(FOREST, 3), 2, 5)),        Rare,      B::Morph,     R::Flat),
+    ("Carnivoran",       fur(n(LAND, 0)),                   Uncommon,  B::Luck,      R::Flat),
+    ("Cetartiodactyl",   fur(n(LAND, 0)),                   Uncommon,  B::Discovery, R::Flat),
+    ("Primate",          fur(t(n(FOREST, 0), 3, 5)),        Rare,      B::Discovery, R::Flat),
+    ("Lemur",            b(Jungle, FOREST),                 Uncommon,  B::Morph,     R::Flat),
+    ("Monkey",           fur(t(n(FOREST, 0), 3, 5)),        Rare,      B::Cards,     R::Flat),
+    ("Ape",              fur(t(n(FOREST, 0), 3, 5)),        Epic,      B::Luck,      R::Flat),
+    ("Chimpanzee",       b(Jungle, FOREST),                 Epic,      B::Luck,      R::Copy(Kin::Mammal)),
+    ("Human",            b(Savanna, LAND),                  Legendary, B::Luck,      R::Catch(Catch::Hubris)),
+    ("Reptile",          t(n(LAND, 0), 3, 5),               Uncommon,  B::Discovery, R::Flat),
+    ("Turtle",           t(n(SHORE, 0), 3, 5),              Uncommon,  B::Cards,     R::Flat),
+    ("Lizard",           v(t(n(LAND, 0), 3, 5), 0, 3),      Common,    B::Luck,      R::Flat),
+    ("Crocodile",        t(n(FRESH, 0), 4, 5),              Rare,      B::Cards,     R::Flat),
+    ("Dinosaur",         v(t(n(LAND, 0), 3, 5), 2, 5),      Epic,      B::Cards,     R::Flat),
+    ("Bird",             n(FOREST, 3),                      Epic,      B::Luck,      R::Flat),
+    ("Clam",             b(Biome::Reef, REEF),              Common,    B::Cards,     R::Flat),
+    ("Squid",            ocean(t(n(SEA, 3), 0, 2)),         Uncommon,  B::Cards,     R::Flat),
+    ("Ammonite",         ocean(t(n(SEA, 2), 3, 5)),         Rare,      B::Luck,      R::Flat),
+    ("Earthworm",        v(n(LAND, 2), 2, 5),               Common,    B::Point,     R::Flat),
+    ("Tardigrade",       n(SEA_OR_LAND, 0),                 Epic,      B::Luck,      R::Extremes),
+    ("Trilobite",        b(Primordial, SEA),                Uncommon,  B::Discovery, R::Flat),
+    ("Anomalocaris",     b(Primordial, SEA),                Epic,      B::Luck,      R::Flat),
+    ("Centipede",        b(CoalSwamp, FOREST),              Common,    B::Quick,     R::Flat),
+    ("Shrimp",           ocean(n(SEA, 2)),                  Common,    B::Cards,     R::Flat),
+    ("Bee",              t(v(n(FOREST, 3), 3, 5), 2, 5),    Uncommon,  B::Luck,      R::Flat),
+    ("Meganeura",        b(CoalSwamp, FRESH),               Epic,      B::Morph,     R::Flat),
+    ("Dunkleosteus",     ocean(t(n(SEA, 3), 3, 5)),         Epic,      B::Luck,      R::Flat),
+    ("Stingray",         ocean(t(n(SEA, 3), 3, 5)),         Uncommon,  B::Discovery, R::Flat),
+    ("Megalodon",        ocean(t(n(SEA, 3), 3, 5)),         Legendary, B::Luck,      R::Catch(Catch::Apex)),
+    ("Seahorse",         b(Biome::Reef, REEF),              Rare,      B::Morph,     R::Flat),
+    ("Anglerfish",       ocean(t(n(SEA, 2), 0, 2)),         Rare,      B::Luck,      R::Flat),
+    ("Tiktaalik",        n(SHORE_OR_FRESH, 3),              Rare,      B::Discovery, R::Flat),
+    ("Salamander",       t(n(FRESH, 0), 1, 2),              Common,    B::Quick,     R::Flat),
+    ("Snake",            t(n(LAND, 0), 3, 5),               Uncommon,  B::Luck,      R::Flat),
+    ("Pterosaur",        b(Hothouse, SHORE),                Epic,      B::Discovery, R::Flat),
+    ("T. rex",           b(Hothouse, LAND),                 Legendary, B::Cards,     R::Catch(Catch::Tyrant)),
+    ("Sauropod",         b(Hothouse, FOREST),               Epic,      B::Cards,     R::Flat),
+    ("Penguin",          t(n(SHORE, 0), 0, 2),              Rare,      B::Luck,      R::Flat),
+    ("Mammoth",          b(IceAge, LAND),                   Epic,      B::Cards,     R::Flat),
+    ("Rabbit",           fur(v(n(LAND, 0), 1, 4)),          Common,    B::Cards,     R::Flat),
+    ("Horse",            v(t(n(LAND, 0), 1, 4), 1, 3),      Uncommon,  B::Luck,      R::Flat),
+    ("Dolphin",          ocean(fur(t(n(SEA, 0), 3, 5))),    Rare,      B::Cards,     R::Flat),
+    ("Lion",             b(Savanna, LAND),                  Rare,      B::Luck,      R::Flat),
+    ("Gorilla",          b(Jungle, FOREST),                 Rare,      B::Point,     R::Flat),
+    ("Nautilus",         b(Biome::Reef, REEF),              Rare,      B::Luck,      R::Flat),
+    ("Fly",              n(LAND, 2),                        Common,    B::Quick,     R::Flat),
+    ("Clownfish",        b(Biome::Reef, REEF),              Common,    B::Discovery, R::Flat),
+    ("Lungfish",         t(n(FRESH, 2), 3, 5),              Rare,      B::Discovery, R::Flat),
+    ("Pig",              fur(v(n(LAND, 0), 1, 5)),          Uncommon,  B::Luck,      R::Flat),
+    ("Tuatara",          t(n(FOREST, 0), 1, 2),             Legendary, B::Discovery, R::Changing),
+    ("Sea Turtle",       b(Biome::Reef, SEA),               Rare,      B::Cards,     R::Flat),
+    ("Plesiosaur",       b(Hothouse, SEA),                  Epic,      B::Cards,     R::Flat),
+    ("Ichthyosaur",      b(Hothouse, SEA),                  Epic,      B::Luck,      R::Flat),
+    ("Triceratops",      b(Hothouse, LAND),                 Epic,      B::Point,     R::Flat),
+    ("Velociraptor",     b(Hothouse, LAND),                 Rare,      B::Quick,     R::Flat),
+    ("Archaeopteryx",    t(n(FOREST, 3), 3, 5),             Legendary, B::Morph,     R::Catch(Catch::Feathers)),
+    ("Ostrich",          b(Savanna, LAND),                  Rare,      B::Luck,      R::Flat),
+    ("Parrot",           b(Jungle, FOREST),                 Epic,      B::Luck,      R::Copy(Kin::Bird)),
+    ("Owl",              t(n(FOREST, 0), 0, 2),             Uncommon,  B::Luck,      R::Flat),
+    ("Koala",            fur(t(n(FOREST, 0), 3, 5)),        Uncommon,  B::Point,     R::Flat),
+    ("Sloth",            b(Jungle, FOREST),                 Uncommon,  B::Cards,     R::Flat),
+    ("Giraffe",          b(Savanna, LAND),                  Rare,      B::Cards,     R::Flat),
+    ("Hippo",            fur(t(n(FRESH, 0), 3, 5)),         Rare,      B::Cards,     R::Flat),
+    ("Rhino",            b(Savanna, LAND),                  Epic,      B::Luck,      R::Flat),
+    ("Bear",             t(n(FOREST, 0), 0, 2),             Rare,      B::Point,     R::Flat),
+    ("Seal",             b(IceAge, SHORE),                  Uncommon,  B::Discovery, R::Flat),
+    ("Synapsid",         n(LAND, 2),                        Uncommon,  B::Luck,      R::Flat),
+    ("Archosaur",        t(n(LAND, 2), 3, 5),               Uncommon,  B::Discovery, R::Flat),
+    ("Theropod",         t(n(LAND, 3), 3, 5),               Rare,      B::Cards,     R::Flat),
+    ("Hominin",          fur(v(t(n(LAND, 3), 2, 4), 1, 5)), Epic,      B::Luck,      R::Flat),
+    ("Perissodactyl",    fur(n(LAND, 0)),                   Uncommon,  B::Quick,     R::Flat),
+    ("Spiny-rayed Fish", t(n(SEA, 2), 3, 5),                Common,    B::Cards,     R::Flat),
+    ("Elephant",         b(Savanna, LAND),                  Epic,      B::Point,     R::Flat),
+    ("Whale",            t(n(SEA, 0), 0, 2),                Epic,      B::Discovery, R::Flat),
+    ("Wolf",             t(n(LAND, 0), 0, 2),               Rare,      B::Luck,      R::Flat),
+    ("Dog",              fur(n(LAND, 0)),                   Uncommon,  B::Luck,      R::Flat),
+    ("Kangaroo",         b(Savanna, LAND),                  Rare,      B::Discovery, R::Flat),
+    ("Tiger",            fur(t(n(FOREST, 0), 0, 2)),        Epic,      B::Luck,      R::Flat),
+    ("Cat",              fur(n(LAND, 0)),                   Common,    B::Morph,     R::Flat),
+    ("Sabre-tooth",      b(IceAge, LAND),                   Epic,      B::Cards,     R::Flat),
+    ("Giant Panda",      v(t(n(FOREST, 0), 1, 2), 3, 5),    Epic,      B::Cards,     R::Flat),
+    ("Cow",              fur(v(n(LAND, 0), 1, 4)),          Common,    B::Luck,      R::Flat),
+    ("Chicken",          fur(n(LAND, 0)),                   Common,    B::Luck,      R::Flat),
+    ("Songbird",         fur(n(FOREST, 0)),                 Common,    B::Quick,     R::Flat),
+    ("Dodo",             b(Jungle, FOREST),                 Legendary, B::Luck,      R::Fragile),
+    ("True Bug",         t(n(LAND, 2), 3, 5),               Common,    B::Quick,     R::Flat),
+    ("Wasp",             v(t(n(LAND, 3), 3, 5), 1, 5),      Uncommon,  B::Luck,      R::Flat),
+    ("Mite",             n(SEA_OR_LAND, 1),                 Common,    B::Cards,     R::Flat),
+    ("Termite",          b(Jungle, FOREST),                 Uncommon,  B::Point,     R::Flat),
+    ("Moss Animal",      b(Primordial, SEA),                Common,    B::Discovery, R::Flat),
+    ("Brittle Star",     b(Primordial, SEA),                Common,    B::Quick,     R::Flat),
+    ("Carp",             t(n(FRESH, 2), 1, 2),              Common,    B::Cards,     R::Flat),
+    ("Dickinsonia",      b(Primordial, SEA),                Rare,      B::Morph,     R::Flat),
+    ("Dimetrodon",       t(n(LAND, 2), 3, 5),               Rare,      B::Quick,     R::Flat),
+    ("Lucy",             b(Savanna, LAND),                  Epic,      B::Point,     R::Flat),
+    ("Neanderthal",      b(IceAge, LAND),                   Epic,      B::Luck,      R::Flat),
+    ("Pakicetus",        fur(t(n(SHORE, 0), 3, 5)),         Rare,      B::Discovery, R::Flat),
+    ("Acanthostega",     b(CoalSwamp, FRESH),               Rare,      B::Discovery, R::Flat),
 ];
 
 /// Every taxon has one (tested), so a miss is a content bug.
@@ -622,6 +551,34 @@ mod tests {
             }
         }
         out
+    }
+
+    #[test]
+    fn only_legendaries_have_a_catch() {
+        let phy = Phylogeny::load();
+        let mut with: Vec<&str> = phy
+            .taxa
+            .iter()
+            .filter(|t| t.eco.rule.drawback().is_some())
+            .map(|t| t.name)
+            .collect();
+        with.sort();
+        assert_eq!(
+            with,
+            [
+                "Archaeopteryx",
+                "Coelacanth",
+                "Dodo",
+                "Human",
+                "Megalodon",
+                "Platypus",
+                "T. rex",
+                "Tuatara"
+            ]
+        );
+        let dodo = of("Dodo");
+        assert_eq!(dodo.describe(), "Better rarity odds x3");
+        assert!(!dodo.rule.drawback().unwrap().contains("found"));
     }
 
     #[test]
@@ -820,8 +777,8 @@ mod tests {
                 }
             };
             let mut keystone = e.describe();
-            if let Rule::Catch(c) = e.rule {
-                keystone = format!("{keystone}; but {}", c.drawback().to_lowercase());
+            if let Some(d) = e.rule.drawback() {
+                keystone = format!("{keystone}; but {}", d.to_lowercase());
             }
             println!(
                 "| {i} | {} | {} | {needs} | {} | {keystone} |",

@@ -2,6 +2,7 @@
 //! let time run, evolve the genome it produced. See `docs/DESIGN.md`.
 
 mod backdrop;
+mod clock;
 mod collapse;
 mod dial;
 mod ecology;
@@ -223,6 +224,9 @@ fn map_layout(game: &Game) -> Layout {
 /// Everything the game loop keeps between frames.
 struct App {
     dev: Dev,
+    /// Wall-clock time the player can't wind forward (`clock.rs`), so
+    /// time with the app closed still counts.
+    clock: clock::Clock,
     game: Game,
     settings: Settings,
     sprites: Sprites,
@@ -279,7 +283,9 @@ impl App {
         if env_flag("ASCENDIO_FRESH") {
             save::clear();
         }
-        let now = Self::clock(&dev);
+        // A sped-up dev clock never becomes the real one.
+        let mut clock = clock::Clock::load(dev.persist && dev.time_scale == 1.0);
+        let now = clock.now(dev.time_scale);
         let mut game = if dev.persist {
             Game::load(now).unwrap_or_else(|| Game::new(now))
         } else {
@@ -348,6 +354,7 @@ impl App {
             demo_timer: 0.8,
             game,
             settings,
+            clock,
             dev,
         };
         // A capture of the board needs it loaded by then.
@@ -355,11 +362,6 @@ impl App {
             app.open_page(Mode::Leaderboard);
         }
         app
-    }
-
-    /// Wall clock, so time with the app closed still counts.
-    fn clock(dev: &Dev) -> f64 {
-        macroquad::miniquad::date::now() * dev.time_scale
     }
 
     fn save(&self) {
@@ -429,7 +431,7 @@ impl App {
             .and_then(|s| s.every)
             .unwrap_or_else(get_frame_time);
         self.elapsed += dt;
-        let now = Self::clock(&self.dev);
+        let now = self.clock.now(self.dev.time_scale);
         self.game.tick(now);
 
         if self.game.phase() != self.last_phase {
@@ -444,6 +446,7 @@ impl App {
             self.type_name();
         } else if is_key_pressed(KeyCode::Escape) {
             self.save();
+            self.clock.save();
             return false;
         }
         if self.asking_name {
@@ -516,6 +519,7 @@ impl App {
         if self.save_timer <= 0.0 {
             self.save_timer = SAVE_INTERVAL;
             self.save();
+            self.clock.save();
         }
         self.animate(dt);
 

@@ -7,6 +7,8 @@ use quad_storage::LocalStorage;
 const KEY: &str = "ascendio_save_v1";
 /// Settings live apart from the game, so starting over keeps them.
 const SETTINGS_KEY: &str = "ascendio_settings_v1";
+/// The trusted clock's anchor (`clock.rs`), apart from the game too.
+const CLOCK_KEY: &str = "ascendio_clock_v1";
 
 /// `quad_storage` keeps `local.data` in the working directory, which on
 /// Android is `/` and read-only (the write panics). Move into the app's own
@@ -42,4 +44,12 @@ pub fn write_settings(json: &str) {
 
 pub fn read_settings() -> Option<String> {
     storage().get(SETTINGS_KEY)
+}
+
+pub fn write_clock(json: &str) {
+    storage().set(CLOCK_KEY, json);
+}
+
+pub fn read_clock() -> Option<String> {
+    storage().get(CLOCK_KEY)
 }
