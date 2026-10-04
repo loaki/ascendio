@@ -9,14 +9,14 @@ license = "MIT"
 macroquad = "0.4"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
-# Persistent key-value storage: browser localStorage on wasm, a local JSON
-# file (`local.data`) natively -- one API for both, so `save.rs` needs no
-# platform branching of its own.
-quad-storage = "0.1.3"
 
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# The save in browser localStorage (src/save.rs). Natively the save is a
+# file save.rs writes itself: quad-storage's own file writes aren't atomic
+# and it panics on a file it can't parse.
+quad-storage = "0.1.3"
 # The web half of src/net.rs: strings to and from web/ascendio.js. Already
 # pulled in by quad-storage, so the version follows it.
-[target.'cfg(target_arch = "wasm32")'.dependencies]
 sapp-jsutils = "0.1.7"
 
 # Small, fast binaries matter on Android.

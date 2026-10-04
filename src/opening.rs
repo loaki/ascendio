@@ -16,6 +16,7 @@ use crate::render::{
 };
 use crate::sprites::Sprites;
 use crate::ui::{self, Assets};
+use crate::view;
 
 const TAPS_TO_CRACK: u32 = 3;
 const PRISM: [u32; 6] = [0xFF7AB8, 0xFFC56B, 0xC5F76A, 0x6FF5E1, 0x5AA8FF, 0xC07BFF];
@@ -50,6 +51,9 @@ enum Stage {
 pub struct Opening {
     stage: Stage,
     t: f32,
+    /// Seconds since the opening began: the background's clock, small
+    /// enough to stay precise as an f32.
+    clock: f32,
     tell: Tier,
     taps: u32,
     /// Counts down after each tap: the glitch and the MUTATION! slam.
@@ -61,10 +65,34 @@ pub struct Opening {
     freeze: f32,
     flash: f32,
     opened: Vec<Opened>,
+    /// Each card's level meter (have, step) as it stood once that card was in.
+    meters: Vec<Meter>,
     flipped: Vec<f32>,
     particles: Vec<Particle>,
     seed: u32,
     bg: GenomeBg,
+}
+
+/// A level meter: specimens toward the next level, and how many it takes
+/// (0 at the top level).
+pub type Meter = (u32, u32);
+
+/// Each card's level meter, `Game::level_progress` as it stood once that
+/// card was in. `game` has applied them all: later ones are taken back out
+/// one by one, then everything is put back.
+pub fn meters(game: &mut Game, opened: &[Opened]) -> Vec<Meter> {
+    let (level, specimens) = (game.level.clone(), game.specimens.clone());
+    let mut out = vec![(0, 0); opened.len()];
+    for (i, o) in opened.iter().enumerate().rev() {
+        let t = o.card.taxon;
+        out[i] = game.level_progress(t);
+        // Every card, new or not, added one specimen.
+        game.specimens[t] = game.specimens[t].saturating_sub(1);
+        game.level[t] = o.level_before;
+    }
+    game.level = level;
+    game.specimens = specimens;
+    out
 }
 
 fn rnd(seed: &mut u32) -> f32 {
@@ -84,7 +112,7 @@ fn lighten(c: Color, k: f32) -> Color {
 }
 
 fn genome_center() -> Vec2 {
-    vec2(screen_width() * 0.5, screen_height() * 0.44)
+    vec2(view::width() * 0.5, screen_height() * 0.44)
 }
 
 fn helix_len() -> f32 {
@@ -192,7 +220,7 @@ fn settled_at(new: bool) -> f32 {
 
 /// Where the card being revealed is shown.
 fn showcase_center() -> Vec2 {
-    vec2(screen_width() * 0.5, screen_height() * 0.36)
+    vec2(view::width() * 0.5, screen_height() * 0.36)
 }
 /// Where the row of card slots sits, as a fraction of the screen height.
 const SLOTS_Y: f32 = 0.775;
@@ -201,7 +229,7 @@ const SLOTS_PER_ROW: usize = 8;
 
 /// Slots per row and the size of one, for `n` cards (no cap on `n`).
 fn slot_layout(n: usize) -> (usize, Vec2) {
-    let sw = screen_width();
+    let sw = view::width();
     let per_row = n.clamp(1, SLOTS_PER_ROW);
     let gap = sw * 0.03;
     let w = ((sw * 0.9 - gap * (per_row as f32 - 1.0)) / per_row as f32).min(sw * 0.155);
@@ -210,7 +238,7 @@ fn slot_layout(n: usize) -> (usize, Vec2) {
 
 /// The centre of card `i`'s slot, of `n`, under the reveal.
 fn slot_pos(i: usize, n: usize) -> Vec2 {
-    let (sw, sh) = (screen_width(), screen_height());
+    let (sw, sh) = (view::width(), screen_height());
     let (per_row, size) = slot_layout(n);
     let rows = n.div_ceil(per_row).max(1);
     let (row, col) = (i / per_row, i % per_row);
@@ -233,7 +261,7 @@ fn draw_empty_slot(c: Vec2, size: Vec2, lit: bool) {
     draw_rectangle(r.x, r.y, r.w, r.h, rgb(0x071422));
     let line = (u * 0.8).max(2.0);
     let (edge, w) = if lit {
-        let pulse = 0.6 + 0.4 * (get_time() as f32 * 4.0).sin();
+        let pulse = 0.6 + 0.4 * crate::pixel::phase(get_time(), 4.0).sin();
         (faded(WHITE, pulse), line * 1.5)
     } else {
         (rgb(0x1E4450), line)
@@ -298,6 +326,7 @@ impl Opening {
         Self {
             stage: Stage::Sealed,
             t: 0.0,
+            clock: 0.0,
             tell: game.genome_tell().unwrap_or(Tier::Common),
             taps: 0,
             mut_flash: 0.0,
@@ -307,6 +336,7 @@ impl Opening {
             freeze: 0.0,
             flash: 0.0,
             opened: Vec::new(),
+            meters: Vec::new(),
             flipped: Vec::new(),
             particles: Vec::new(),
             seed: seed.max(1),
@@ -350,7 +380,9 @@ impl Opening {
     }
 
     /// `results` must be `Some` when `wants_results()` was true (best last).
-    pub fn tap(&mut self, results: Option<Vec<Opened>>) {
+    /// `results`: the opened cards and their `meters`, on the tap that
+    /// bursts it.
+    pub fn tap(&mut self, results: Option<(Vec<Opened>, Vec<Meter>)>) {
         let u = render::u();
         match self.stage {
             Stage::Sealed => {
@@ -374,7 +406,7 @@ impl Opening {
                     u * 1.3,
                 );
                 if self.taps >= TAPS_TO_CRACK {
-                    self.opened = results.unwrap_or_default();
+                    (self.opened, self.meters) = results.unwrap_or_default();
                     self.flipped = vec![0.0; self.opened.len()];
                     self.stage = Stage::Burst;
                     self.t = 0.0;
@@ -447,7 +479,7 @@ impl Opening {
     /// down, until the real one (`taxon`) locks in before `REVEAL_AT`.
     fn draw_roulette(&self, game: &Game, sprites: &Sprites, taxon: usize, i: usize, c: Vec2) {
         let u = render::u();
-        let size = screen_width() * 0.42;
+        let size = view::width() * 0.42;
         let (shown, ticked, locked) = roulette(game, taxon, i, self.t, REVEAL_AT - ROULETTE_HOLD);
         let tint = if ticked {
             Color::new(0.24, 0.27, 0.32, 1.0)
@@ -495,6 +527,7 @@ impl Opening {
             return;
         }
         self.t += dt;
+        self.clock += dt;
         self.shake = (self.shake - dt * 40.0 * render::u()).max(0.0);
         self.flash = (self.flash - dt * 1.8).max(0.0);
         for f in self.flipped.iter_mut() {
@@ -567,9 +600,9 @@ impl Opening {
     }
 
     pub fn draw(&mut self, game: &Game, sprites: &Sprites, assets: &Assets) {
-        let (sw, sh) = (screen_width(), screen_height());
+        let (sw, sh) = (view::width(), screen_height());
         let off = self.shake_offset();
-        let t = get_time() as f32;
+        let t = self.clock;
         let tell = tier_color(self.tell);
         let rays = self.ray_spec();
         self.bg.draw(t, rays.as_ref());
@@ -628,7 +661,7 @@ impl Opening {
 
     fn draw_sealed(&self, assets: &Assets, off: Vec2, t: f32) {
         let u = render::u();
-        let (sw, sh) = (screen_width(), screen_height());
+        let (sw, sh) = (view::width(), screen_height());
         let c = genome_center() + off;
         let n = self.taps;
         let charge = n as f32 / TAPS_TO_CRACK as f32;
@@ -748,7 +781,7 @@ impl Opening {
 
     fn draw_burst(&self, assets: &Assets, off: Vec2, t: f32, tell: Color) {
         let u = render::u();
-        let (sw, sh) = (screen_width(), screen_height());
+        let (sw, sh) = (view::width(), screen_height());
         let c = genome_center() + off;
         if self.t < BOOM {
             let k = ease_out_cubic(self.t / (BOOM - 0.07));
@@ -835,7 +868,7 @@ impl Opening {
         i: usize,
     ) {
         let u = render::u();
-        let (sw, sh) = (screen_width(), screen_height());
+        let (sw, sh) = (view::width(), screen_height());
         let o = self.opened[i].clone();
         let taxon = o.card.taxon;
         let tx = game.taxon(taxon);
@@ -858,15 +891,16 @@ impl Opening {
             assets.glow(c, sw * 0.35, col, 0.3);
             ui::draw_taxon(sprites, game, taxon, o.card.morph, c, sw * 0.32 * k, WHITE);
             text_centered(
-                tx.name,
+                tx.label(),
                 sw * 0.5,
                 sh * 0.52,
-                fit_px(tx.name, sw * 0.9, u * 10.0),
+                fit_px(tx.label(), sw * 0.9, u * 10.0),
                 TEXT,
             );
             text_centered("+1 SPECIMEN", sw * 0.5, sh * 0.575, u * 8.0, LIME);
             let bar = Rect::new(sw * 0.2, sh * 0.6, sw * 0.6, u * 3.0);
-            let (have, step) = game.level_progress(taxon);
+            // Not the game's: a later copy of the same animal is already in.
+            let (have, step) = self.meters.get(i).copied().unwrap_or((0, 0));
             render::draw_meter(
                 bar.x,
                 bar.y,
@@ -991,10 +1025,10 @@ impl Opening {
             };
             text_centered(&label, sw * 0.5, sh * 0.12, u * 9.0 * stamp, PINK);
             text_centered(
-                tx.name,
+                tx.label(),
                 sw * 0.5,
                 sh * 0.20,
-                fit_px(tx.name, sw * 0.9, u * 12.0),
+                fit_px(tx.label(), sw * 0.9, u * 12.0),
                 TEXT,
             );
             text_centered(tier.name(), sw * 0.5, sh * 0.25, u * 7.5, col);

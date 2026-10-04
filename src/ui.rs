@@ -10,6 +10,7 @@ use crate::game::{self, Boon, Game, Phase, Report, Status};
 use crate::genome;
 use crate::genome::Morph;
 use crate::leaderboard::{Board, Entry, Leaderboard, View};
+use crate::names::Language;
 use crate::planet::{self, Biome, Lever};
 use crate::render::{
     self, draw_meter, faded, fit_px, rgb, text, text_centered, text_width, wrap_lines, ACCENT_DNA,
@@ -18,6 +19,7 @@ use crate::render::{
 };
 use crate::settings;
 use crate::sprites::{self, Sprites};
+use crate::view;
 
 /// Panel and button surfaces.
 const DEEP_BG: Color = rgb(0x05090F);
@@ -188,7 +190,7 @@ pub fn draw_taxon(
 pub fn gear_rect() -> Rect {
     let bar_h = render::bar_height();
     let s = bar_h * 0.62;
-    Rect::new(screen_width() - s - bar_h * 0.19, (bar_h - s) * 0.5, s, s)
+    Rect::new(view::width() - s - bar_h * 0.19, (bar_h - s) * 0.5, s, s)
 }
 
 /// The gear in its box; `lit` while settings are open.
@@ -228,7 +230,7 @@ fn draw_icon_button(r: Rect, icon: &[Texture2D; 2], lit: bool, accent: Color) {
 }
 
 fn draw_top_bar() {
-    let (sw, bar_h) = (screen_width(), render::bar_height());
+    let (sw, bar_h) = (view::width(), render::bar_height());
     draw_rectangle(0.0, 0.0, sw, bar_h, HUD_BG);
     draw_line(0.0, bar_h, sw, bar_h, 1.0, EDGE);
 }
@@ -291,9 +293,9 @@ pub fn draw_rad_info(game: &Game) {
         return;
     };
     let u = render::u();
-    let w = screen_width() * 0.62;
+    let w = view::width() * 0.62;
     let r = Rect::new(
-        screen_width() - w - u * 4.0,
+        view::width() - w - u * 4.0,
         b.y + b.h + u * 4.0,
         w,
         u * 30.0,
@@ -367,7 +369,7 @@ pub fn draw_hud(game: &Game, now: f64, assets: &Assets) {
             game.discovered(),
             game.phy.len(),
             game.taxon(best).depth,
-            game.taxon(best).name
+            game.taxon(best).label()
         )
     };
     text(
@@ -383,7 +385,7 @@ pub fn draw_hud(game: &Game, now: f64, assets: &Assets) {
 
 /// The lever panel, just above the bottom bar.
 pub fn panel_rect() -> Rect {
-    let (sw, sh) = (screen_width(), screen_height());
+    let (sw, sh) = (view::width(), screen_height());
     let (w, h) = (sw * 0.84, sh * 0.31);
     Rect::new((sw - w) * 0.5, sh - render::bar_height() - h - 10.0, w, h)
 }
@@ -426,7 +428,7 @@ fn shape_hint(game: &Game) -> (String, Color) {
         .find_map(|&k| game.dormant_reason(k).map(|why| (k, why)))
     {
         return (
-            format!("Keystone {} is dormant: {why}", game.taxon(k).name),
+            format!("Keystone {} is dormant: {why}", game.taxon(k).label()),
             ACCENT_WARN,
         );
     }
@@ -533,21 +535,48 @@ fn draw_keystone_row(game: &Game, sprites: &Sprites, keystones: &[usize], area: 
             (lines, c)
         })
         .collect();
-    // The animals get whatever the tallest effect leaves.
+    // The animals get whatever the tallest effect leaves; too little (a
+    // short screen), and they go beside their effects instead.
     let most = effects.iter().map(|(l, _)| l.len()).max().unwrap_or(1);
     let icon = (px * 1.7).min(area.h - line_h * most as f32 - u);
+    let beside = icon < px * 1.4;
+    let icon = if beside {
+        (px * 1.9).min(area.h - u)
+    } else {
+        icon
+    };
     for (k, (&t, (lines, c))) in keystones.iter().zip(&effects).enumerate() {
-        let cx = area.x + (k as f32 + 0.5) * slot;
+        let x0 = area.x + k as f32 * slot;
+        let cx = x0 + slot * 0.5;
         let dormant = game.dormant_reason(t).is_some();
+        let at = if beside {
+            vec2(x0 + u + icon * 0.5, area.y + area.h * 0.5)
+        } else {
+            vec2(cx, area.y + icon * 0.5)
+        };
         draw_taxon(
             sprites,
             game,
             t,
             game.best_morph(t),
-            vec2(cx, area.y + icon * 0.5),
+            at,
             icon,
             if dormant { DORMANT } else { WHITE },
         );
+        if beside {
+            let tx = x0 + u * 2.0 + icon;
+            let top = area.y + (area.h - line_h * lines.len() as f32) * 0.5;
+            for (n, line) in lines.iter().enumerate() {
+                text(
+                    line,
+                    tx,
+                    top + line_h * (n as f32 + 0.8),
+                    fit_px(line, x0 + slot - u - tx, line_px),
+                    *c,
+                );
+            }
+            continue;
+        }
         for (n, line) in lines.iter().enumerate() {
             text_centered(
                 line,
@@ -946,13 +975,13 @@ pub fn draw_wait_panel(game: &Game, sprites: &Sprites) {
 // --- bottom bar -------------------------------------------------------------------
 
 pub fn bottom_action_rect() -> Rect {
-    let (sw, bar_h) = (screen_width(), render::bar_height());
+    let (sw, bar_h) = (view::width(), render::bar_height());
     let w = sw * 0.44;
     Rect::new((sw - w) * 0.5, screen_height() - bar_h, w, bar_h)
 }
 
 pub fn bottom_tab_rect(right: bool) -> Rect {
-    let (sw, bar_h) = (screen_width(), render::bar_height());
+    let (sw, bar_h) = (view::width(), render::bar_height());
     let a = bottom_action_rect();
     let y = screen_height() - bar_h;
     if right {
@@ -971,7 +1000,7 @@ pub fn draw_bottom_bar(
     choosing: bool,
     assets: &Assets,
 ) {
-    let (sw, bar_h) = (screen_width(), render::bar_height());
+    let (sw, bar_h) = (view::width(), render::bar_height());
     let y = screen_height() - bar_h;
     draw_rectangle(0.0, y, sw, bar_h, HUD_BG);
     draw_line(0.0, y, sw, y, 1.0, EDGE);
@@ -1178,7 +1207,7 @@ impl Sort {
             Sort::Rarity => taxa.sort_by_key(|&t| std::cmp::Reverse(game.taxon(t).eco.tier)),
             Sort::Level => taxa.sort_by_key(|&t| std::cmp::Reverse(level(t))),
             Sort::Age => taxa.sort_by(|&a, &b| game.taxon(b).mya.total_cmp(&game.taxon(a).mya)),
-            Sort::Name => taxa.sort_by_key(|&t| game.taxon(t).name),
+            Sort::Name => taxa.sort_by_key(|&t| crate::names::sort_key(game.taxon(t).label())),
             Sort::Newest => taxa.sort_by_key(|&t| std::cmp::Reverse(game.found_ma[t])),
         }
     }
@@ -1276,7 +1305,7 @@ impl Menu {
 
 /// The sort and filter buttons, under the keystone slots.
 pub fn keystone_menu_button_rect(game: &Game, menu: Menu) -> Rect {
-    let (sw, u) = (screen_width(), render::u());
+    let (sw, u) = (view::width(), render::u());
     let gap = u * 3.0;
     let w = (sw * 0.92 - gap) * 0.5;
     let x = sw * 0.04 + if menu == Menu::Filter { w + gap } else { 0.0 };
@@ -1288,10 +1317,18 @@ pub fn keystone_menu_button_rect(game: &Game, menu: Menu) -> Rect {
     )
 }
 
+/// Item `i` of the dropdown: it opens downward, or upward when it would
+/// run under the bottom bar.
 fn keystone_menu_item_rect(game: &Game, menu: Menu, i: usize) -> Rect {
-    let b = keystone_menu_button_rect(game, menu);
-    let h = render::u() * 10.0;
-    Rect::new(b.x, b.y + b.h + render::u() + i as f32 * h, b.w, h)
+    let (b, u) = (keystone_menu_button_rect(game, menu), render::u());
+    let h = u * 10.0;
+    let below = b.y + b.h + u;
+    let top = if below + h * menu.len() as f32 > screen_height() - render::bar_height() - u {
+        b.y - u - h * menu.len() as f32
+    } else {
+        below
+    };
+    Rect::new(b.x, top + i as f32 * h, b.w, h)
 }
 
 /// The item of the open dropdown under `p`.
@@ -1337,7 +1374,7 @@ fn draw_keystone_menus(game: &Game, view: &KeystoneView) {
     }
 }
 
-/// The open dropdown, over the grid.
+/// The open dropdown, over the grid (or the slots).
 fn draw_keystone_menu_list(game: &Game, view: &KeystoneView) {
     let Some(menu) = view.menu else { return };
     let u = render::u();
@@ -1359,7 +1396,7 @@ fn draw_keystone_menu_list(game: &Game, view: &KeystoneView) {
 }
 
 fn slot_rect(i: usize) -> Rect {
-    let sw = screen_width();
+    let sw = view::width();
     let h = render::u() * 21.0;
     Rect::new(
         sw * 0.04,
@@ -1375,11 +1412,11 @@ fn grid_top(game: &Game) -> f32 {
 }
 
 fn cell_size() -> f32 {
-    screen_width() * 0.92 / 7.0
+    view::width() * 0.92 / 7.0
 }
 
 fn info_rect() -> Rect {
-    let sw = screen_width();
+    let sw = view::width();
     let h = render::u() * 46.0;
     Rect::new(
         sw * 0.04,
@@ -1449,7 +1486,7 @@ pub fn keystone_cell_at(game: &Game, view: &KeystoneView, p: Vec2) -> Option<usi
     if p.y < grid_top(game) || p.y > info_rect().y {
         return None;
     }
-    let x0 = screen_width() * 0.04;
+    let x0 = view::width() * 0.04;
     let col = ((p.x - x0) / cs).floor();
     let row = ((p.y - top) / cs).floor();
     if !(0.0..7.0).contains(&col) || row < 0.0 {
@@ -1479,7 +1516,7 @@ pub fn draw_keystones(
     assets: &Assets,
 ) {
     clear_background(render::BG);
-    let sw = screen_width();
+    let sw = view::width();
     let top = render::bar_height();
     let px = render::u() * 7.5;
     text(
@@ -1548,10 +1585,10 @@ pub fn draw_keystones(
                     morph_badge(morph, r.x + 2.0, r.y + r.h - 2.0, r.h * 0.22);
                 }
                 text(
-                    game.taxon(t).name,
+                    game.taxon(t).label(),
                     r.x + r.h * 1.15,
                     r.y + r.h * 0.42,
-                    fit_px(game.taxon(t).name, r.w * 0.5, r.h * 0.3),
+                    fit_px(game.taxon(t).label(), r.w * 0.5, r.h * 0.3),
                     if asleep { TEXT_DIM } else { TEXT },
                 );
                 let (line, line_col) = match rep {
@@ -1707,10 +1744,10 @@ pub fn draw_keystones(
             let tx = r.x + r.h * 0.9;
             let col_w = keystone_equip_rect().x - tx - r.w * 0.02;
             text(
-                game.taxon(t).name,
+                game.taxon(t).label(),
                 tx,
                 r.y + r.h * 0.2,
-                fit_px(game.taxon(t).name, col_w, r.h * 0.16),
+                fit_px(game.taxon(t).label(), col_w, r.h * 0.16),
                 TEXT,
             );
             text(eco.tier.name(), tx, r.y + r.h * 0.36, r.h * 0.13, col);
@@ -1830,83 +1867,14 @@ pub fn draw_keystones(
 // --- an animal's page ------------------------------------------------------------------
 
 fn detail_rect() -> Rect {
-    let (sw, sh) = (screen_width(), screen_height());
-    Rect::new(sw * 0.06, sh * 0.12, sw * 0.88, sh * 0.76)
+    let (sw, sh) = (view::width(), screen_height());
+    Rect::new(sw * 0.06, sh * 0.07, sw * 0.88, sh * 0.86)
 }
 
-pub fn draw_detail(game: &Game, taxon: usize, sprites: &Sprites, assets: &Assets) {
-    let (sw, sh) = (screen_width(), screen_height());
-    draw_rectangle(0.0, 0.0, sw, sh, faded(render::BG, 0.82));
-    let r = detail_rect();
-    let t = game.taxon(taxon);
-    let found = game.unlocked[taxon];
-    let eco = t.eco;
-    let col = if found {
-        render::tier_color(eco.tier)
-    } else {
-        LOCKED_TEXT
-    };
-    frame(r, rgb(0x070D1C), col, 2.0);
-    let cx = r.x + r.w * 0.5;
-    let sy = r.y + r.h * 0.17;
-    if found {
-        assets.glow(vec2(cx, sy), r.w * 0.3, col, 0.3);
-        draw_taxon(
-            sprites,
-            game,
-            taxon,
-            game.best_morph(taxon),
-            vec2(cx, sy),
-            r.w * 0.34,
-            WHITE,
-        );
-    } else {
-        draw_taxon(
-            sprites,
-            game,
-            taxon,
-            Morph::None,
-            vec2(cx, sy),
-            r.w * 0.34,
-            render::taxon_tint(game, taxon),
-        );
-    }
-    let px = r.w * 0.045;
-    let name = if found || game.is_fossil(taxon) {
-        t.name
-    } else {
-        "? ? ?"
-    };
-    text_centered(
-        name,
-        cx,
-        r.y + r.h * 0.36,
-        fit_px(name, r.w * 0.9, px * 1.8),
-        TEXT,
-    );
-    let sub = if game.is_fossil(taxon) {
-        format!("FOSSIL  ·  {}  ·  {}", t.clade, eco.tier.name())
-    } else {
-        format!("{}  ·  {}  ·  {}", t.clade, t.age_label(), eco.tier.name())
-    };
-    text_centered(
-        &sub,
-        cx,
-        r.y + r.h * 0.415,
-        fit_px(&sub, r.w * 0.9, px),
-        if game.is_fossil(taxon) {
-            STONE_TEXT
-        } else {
-            col
-        },
-    );
-
-    let x = r.x + r.w * 0.07;
-    let mut y = r.y + r.h * 0.50;
-    text("NEEDS  (your planet right now)", x, y, px, ACCENT_WARN);
-    y += px * 1.6;
+/// The page's needs: each one, and whether the planet meets it now.
+fn detail_needs(game: &Game, taxon: usize) -> Vec<(String, bool)> {
     let p = &game.planet;
-    let n = eco.needs;
+    let n = game.taxon(taxon).eco.needs;
     let mut rows: Vec<(String, bool)> = Vec::new();
     if let Some(b) = n.biome {
         rows.push((format!("Biome: {}", b.name()), b.ranges().contains(p)));
@@ -1924,7 +1892,109 @@ pub fn draw_detail(game: &Game, taxon: usize, sprites: &Sprites, assets: &Assets
             (lo..=hi).contains(&p.get(lever)),
         ));
     }
-    for (label, ok) in rows {
+    rows
+}
+
+/// Where the page's header ends and its needs start, in text sizes.
+const DETAIL_HEAD: f32 = 15.0;
+/// A morph tile's side, in text sizes.
+const DETAIL_TILE: f32 = 4.4;
+
+/// The page's height in text sizes, for its content at `px`.
+fn detail_units(game: &Game, taxon: usize, w: f32, px: f32) -> f32 {
+    let eco = game.taxon(taxon).eco;
+    let found = game.unlocked[taxon];
+    let mut units = DETAIL_HEAD + 1.6 + detail_needs(game, taxon).len() as f32 * 1.5 + 0.6;
+    if found || game.is_fossil(taxon) {
+        units += wrap_lines(&eco.describe(), w * 0.86, px).len() as f32 * 1.4;
+        units += eco.rule.drawback().map_or(0.0, |_| 1.4);
+    } else {
+        units += 1.4;
+    }
+    if found {
+        units += 1.6 + 1.8 + DETAIL_TILE + 2.9;
+    }
+    // "tap to close" and the margin under it.
+    units + 2.4
+}
+
+pub fn draw_detail(game: &Game, taxon: usize, sprites: &Sprites, assets: &Assets) {
+    let (sw, sh) = (view::width(), screen_height());
+    draw_rectangle(0.0, 0.0, sw, sh, faded(render::BG, 0.82));
+    let r = detail_rect();
+    let t = game.taxon(taxon);
+    let found = game.unlocked[taxon];
+    let eco = t.eco;
+    let col = if found {
+        render::tier_color(eco.tier)
+    } else {
+        LOCKED_TEXT
+    };
+    frame(r, rgb(0x070D1C), col, 2.0);
+    // Everything is sized by the text, the text by the width -- unless the
+    // page would then run out of the frame (a short screen, many needs).
+    let px = r.w * 0.045;
+    let px = px.min(r.h / detail_units(game, taxon, r.w, px));
+    let cx = r.x + r.w * 0.5;
+    let top = r.y + px;
+    let sy = top + px * 4.0;
+    let size = px * 7.5;
+    if found {
+        assets.glow(vec2(cx, sy), size * 0.9, col, 0.3);
+        draw_taxon(
+            sprites,
+            game,
+            taxon,
+            game.best_morph(taxon),
+            vec2(cx, sy),
+            size,
+            WHITE,
+        );
+    } else {
+        draw_taxon(
+            sprites,
+            game,
+            taxon,
+            Morph::None,
+            vec2(cx, sy),
+            size,
+            render::taxon_tint(game, taxon),
+        );
+    }
+    let name = if found || game.is_fossil(taxon) {
+        t.label()
+    } else {
+        "? ? ?"
+    };
+    text_centered(
+        name,
+        cx,
+        top + px * 10.0,
+        fit_px(name, r.w * 0.9, px * 1.8),
+        TEXT,
+    );
+    let sub = if game.is_fossil(taxon) {
+        format!("FOSSIL  ·  {}  ·  {}", t.clade, eco.tier.name())
+    } else {
+        format!("{}  ·  {}  ·  {}", t.clade, t.age_label(), eco.tier.name())
+    };
+    text_centered(
+        &sub,
+        cx,
+        top + px * 11.8,
+        fit_px(&sub, r.w * 0.9, px),
+        if game.is_fossil(taxon) {
+            STONE_TEXT
+        } else {
+            col
+        },
+    );
+
+    let x = r.x + r.w * 0.07;
+    let mut y = r.y + px * DETAIL_HEAD;
+    text("NEEDS  (your planet right now)", x, y, px, ACCENT_WARN);
+    y += px * 1.6;
+    for (label, ok) in detail_needs(game, taxon) {
         text(&label, x, y, px, TEXT);
         let v = if ok { "YES" } else { "NO" };
         text(
@@ -1972,9 +2042,11 @@ pub fn draw_detail(game: &Game, taxon: usize, sprites: &Sprites, assets: &Assets
             text("MAX", r.x + r.w * 0.78, y, px, LIME);
         }
         y += px * 1.8;
-        let mw = r.w * 0.2;
+        // Four tiles across the page's width, whatever their size.
+        let mw = px * DETAIL_TILE;
+        let gap = (r.w * 0.86 - mw * 4.0) / 3.0;
         for (k, m) in Morph::ALL.into_iter().enumerate() {
-            let mr = Rect::new(x + k as f32 * (mw + r.w * 0.02), y, mw, mw);
+            let mr = Rect::new(x + k as f32 * (mw + gap), y, mw, mw);
             let owned = game.owns_morph(taxon, m);
             let worn = owned && game.edition(taxon) == m;
             frame(
@@ -2005,7 +2077,8 @@ pub fn draw_detail(game: &Game, taxon: usize, sprites: &Sprites, assets: &Assets
                 fit_px(m.name(), mw * 0.9, px * 0.7),
                 if owned { TEXT } else { LOCKED_TEXT },
             );
-            for (i, line) in wrap_lines(m.effect(), mw, px * 0.6)
+            // The effect may use the gap beside the tile.
+            for (i, line) in wrap_lines(m.effect(), mw + gap * 0.8, px * 0.6)
                 .iter()
                 .take(2)
                 .enumerate()
@@ -2064,7 +2137,7 @@ pub fn biomes_button_rect() -> Rect {
     let u = render::u();
     let (w, h) = (u * 40.0, u * 16.0);
     Rect::new(
-        screen_width() - w - u * 4.0,
+        view::width() - w - u * 4.0,
         render::bar_height() + u * 4.0,
         w,
         h,
@@ -2100,7 +2173,7 @@ fn biome_recipe(b: Biome) -> String {
 /// Every biome: its levers, whether the planet is it (or why not), and its
 /// animals, found ones in colour.
 pub fn draw_biomes(game: &Game, sprites: &Sprites) {
-    let (sw, sh, u) = (screen_width(), screen_height(), render::u());
+    let (sw, sh, u) = (view::width(), screen_height(), render::u());
     draw_rectangle(0.0, 0.0, sw, sh, faded(render::BG, 0.9));
     let r = Rect::new(sw * 0.04, sh * 0.07, sw * 0.92, sh * 0.86);
     frame(r, rgb(0x070D1C), CYAN, 2.0);
@@ -2215,9 +2288,15 @@ pub fn draw_biomes(game: &Game, sprites: &Sprites) {
 // --- the boon pick ----------------------------------------------------------------------
 
 pub fn boon_rect(i: usize) -> Rect {
-    let (sw, sh) = (screen_width(), screen_height());
+    let (sw, sh) = (view::width(), screen_height());
     let (w, h) = (sw * 0.84, sh * 0.15);
     Rect::new((sw - w) * 0.5, sh * 0.26 + i as f32 * (h + sh * 0.03), w, h)
+}
+
+/// The offered boon under `p`: an offer can hold fewer than three.
+pub fn boon_at(game: &Game, p: Vec2) -> Option<usize> {
+    let n = game.boon_offer.as_ref().map_or(0, |o| o.len());
+    (0..n).find(|&i| boon_rect(i).contains(p))
 }
 
 fn boon_color(b: Boon) -> Color {
@@ -2232,7 +2311,7 @@ fn boon_color(b: Boon) -> Color {
 }
 
 pub fn draw_boons(game: &Game, sprites: &Sprites, assets: &Assets, hover: Option<usize>) {
-    let (sw, sh) = (screen_width(), screen_height());
+    let (sw, sh) = (view::width(), screen_height());
     draw_rectangle(0.0, 0.0, sw, sh, faded(render::BG, 0.9));
     let t = get_time() as f32;
     text_centered("PICK A BOON", sw * 0.5, sh * 0.16, sh * 0.04, ACCENT_WARN);
@@ -2292,6 +2371,8 @@ pub struct SettingsView {
     pub allowed: bool,
     /// `Settings::brightness`, in percent.
     pub brightness: u8,
+    /// The language of the animals' names.
+    pub language: Language,
     /// The leaderboard name.
     pub name: String,
     /// The name being typed, when the game reads the keyboard itself.
@@ -2301,7 +2382,7 @@ pub struct SettingsView {
 /// The top bar of a full-screen page: back at the left, its title, and the
 /// trophy and the gear, the page's own one lit.
 fn draw_screen_bar(title: &str, assets: &Assets, gear_lit: bool, trophy_lit: bool) {
-    let (sw, u, bar_h) = (screen_width(), render::u(), render::bar_height());
+    let (sw, u, bar_h) = (view::width(), render::u(), render::bar_height());
     draw_top_bar();
     draw_gear(assets, gear_lit);
     draw_trophy(assets, trophy_lit);
@@ -2331,7 +2412,7 @@ fn draw_screen_bar(title: &str, assets: &Assets, gear_lit: bool, trophy_lit: boo
 /// The build, in the footer of a full-screen page: `make apk` sets
 /// ASCENDIO_VERSION.
 fn draw_version_footer() {
-    let (sw, sh, bar_h) = (screen_width(), screen_height(), render::bar_height());
+    let (sw, sh, bar_h) = (view::width(), screen_height(), render::bar_height());
     let foot = sh - bar_h;
     draw_line(0.0, foot, sw, foot, 1.0, EDGE);
     text_centered(
@@ -2353,7 +2434,7 @@ fn draw_version_footer() {
 /// The back arrow, at the left end of the top bar.
 pub fn settings_back_rect() -> Rect {
     let g = gear_rect();
-    Rect::new(screen_width() - g.x - g.w, g.y, g.w, g.h)
+    Rect::new(view::width() - g.x - g.w, g.y, g.w, g.h)
 }
 
 /// The notifications panel, under the leaderboard's.
@@ -2365,7 +2446,7 @@ fn settings_panel_rect() -> Rect {
 /// The display panel, under the notifications.
 fn display_panel_rect() -> Rect {
     let (n, u) = (settings_panel_rect(), render::u());
-    Rect::new(n.x, n.y + n.h + u * 6.0, n.w, u * 34.0)
+    Rect::new(n.x, n.y + n.h + u * 6.0, n.w, u * 50.0)
 }
 
 /// The brightness stepper's `-` and `+`.
@@ -2376,9 +2457,18 @@ pub fn brightness_button_rect(plus: bool) -> Rect {
     Rect::new(x, p.y + u * 16.0, s, s)
 }
 
+/// The EN and FR buttons of the species names row, under the brightness.
+pub fn language_button_rect(lang: Language) -> Rect {
+    let (p, u) = (display_panel_rect(), render::u());
+    let (w, h) = (u * 16.0, u * 13.0);
+    let fr = lang == Language::French;
+    let x = p.x + p.w - u * 5.0 - w - if fr { 0.0 } else { w + u * 3.0 };
+    Rect::new(x, p.y + u * 32.0, w, h)
+}
+
 /// The leaderboard panel, first on the page.
 fn player_panel_rect() -> Rect {
-    let (sw, u) = (screen_width(), render::u());
+    let (sw, u) = (view::width(), render::u());
     let y = render::bar_height() + u * 8.0;
     Rect::new(sw * 0.04, y, sw * 0.92, u * 34.0)
 }
@@ -2448,7 +2538,7 @@ fn draw_display_panel(view: &SettingsView) {
     let levels =
         (settings::BRIGHTNESS_MAX - settings::BRIGHTNESS_MIN) / settings::BRIGHTNESS_STEP + 1;
     let lit = (view.brightness - settings::BRIGHTNESS_MIN) / settings::BRIGHTNESS_STEP + 1;
-    let pip_w = screen_width() * 0.0235;
+    let pip_w = view::width() * 0.0235;
     let pip_h = pip_w * 1.4;
     let x0 = minus.x - u * 5.0 - (levels as f32 * 1.35 - 0.35) * pip_w;
     for k in 0..levels {
@@ -2475,6 +2565,29 @@ fn draw_display_panel(view: &SettingsView) {
         };
         frame(b, fill, edge, 1.5);
         text_centered(label, b.x + b.w * 0.5, b.y + b.h * 0.72, b.h * 0.7, ink);
+    }
+
+    // Species names: two buttons, the chosen one lit.
+    let en = language_button_rect(Language::English);
+    let label = "Species names";
+    text(
+        label,
+        x,
+        en.y + en.h * 0.66,
+        fit_px(label, en.x - u * 4.0 - x, px),
+        TEXT,
+    );
+    for (lang, tag) in [(Language::English, "EN"), (Language::French, "FR")] {
+        let b = language_button_rect(lang);
+        let on = view.language == lang;
+        frame(b, BUTTON_BG, if on { CYAN } else { BUTTON_EDGE }, 1.5);
+        text_centered(
+            tag,
+            b.x + b.w * 0.5,
+            b.y + b.h * 0.68,
+            b.h * 0.5,
+            if on { CYAN } else { TEXT_DIM },
+        );
     }
 }
 
@@ -2569,7 +2682,7 @@ pub fn draw_settings(view: &SettingsView, assets: &Assets) {
 
 fn board_rows_rect() -> Rect {
     let (sw, sh, u, bar_h) = (
-        screen_width(),
+        view::width(),
         screen_height(),
         render::u(),
         render::bar_height(),
@@ -2677,7 +2790,7 @@ fn draw_board_row(game: &Game, sprites: &Sprites, e: &Entry, r: Rect) {
 pub fn draw_leaderboard(game: &Game, lb: &Leaderboard, sprites: &Sprites, assets: &Assets) {
     clear_background(render::BG);
     draw_screen_bar("LEADERBOARD", assets, false, true);
-    let (sw, u) = (screen_width(), render::u());
+    let (sw, u) = (view::width(), render::u());
     let rows = board_rows_rect();
     let px = u * 6.0;
     let mid = rows.y + rows.h * 0.4;

@@ -332,7 +332,7 @@ fn draw_edges(game: &Game, layout: &Layout, cam: &Camera) {
 }
 
 fn draw_nodes(game: &Game, layout: &Layout, cam: &Camera, sprites: &Sprites) {
-    let (sw, sh) = (screen_width(), screen_height());
+    let (sw, sh) = (crate::view::width(), screen_height());
     for i in 0..game.phy.len() {
         let Some(b) = layout.get(i) else { continue };
         let center = cam.world_to_screen(b.center);
@@ -362,7 +362,7 @@ fn draw_nodes(game: &Game, layout: &Layout, cam: &Camera, sprites: &Sprites) {
         let text_w = (x + w - h * 0.15 - text_x0).max(1.0);
         let name_px = LABEL_PX * cam.zoom;
         if found {
-            let name = game.taxon(i).name;
+            let name = game.taxon(i).label();
             text(
                 name,
                 text_x0,
@@ -384,7 +384,7 @@ fn draw_nodes(game: &Game, layout: &Layout, cam: &Camera, sprites: &Sprites) {
                 TEXT_DIM,
             );
         } else if fossil {
-            let name = game.taxon(i).name;
+            let name = game.taxon(i).label();
             text(
                 name,
                 text_x0,
@@ -408,7 +408,7 @@ fn draw_nodes(game: &Game, layout: &Layout, cam: &Camera, sprites: &Sprites) {
 
 /// One design pixel: the UI sits on the backdrop's 180-wide grid.
 pub fn u() -> f32 {
-    screen_width() / crate::pixel::W as f32
+    crate::view::width() / crate::pixel::W as f32
 }
 
 pub fn bar_height() -> f32 {

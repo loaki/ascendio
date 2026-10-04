@@ -2471,12 +2471,13 @@ impl Default for Pose {
 /// Idle motion per clade, a pure function of time. Phases are spread by the
 /// golden angle so sprites never move in lockstep.
 pub fn pose(group: Group, taxon: usize, t: f64) -> Pose {
-    let phase = taxon as f32 * 2.399_963;
-    let tt = t as f32;
+    let off = taxon as f32 * 2.399_963;
+    // The angle of a `rate` rad/s wave, wrapped in f64 so it stays smooth.
+    let w = |rate: f64| crate::pixel::phase(t, rate) + off;
 
     match group {
         Group::Backbone => {
-            let s = 1.0 + 0.05 * (tt * 1.1 + phase).sin();
+            let s = 1.0 + 0.05 * w(1.1).sin();
             Pose {
                 scale_x: s,
                 scale_y: s,
@@ -2484,8 +2485,8 @@ pub fn pose(group: Group, taxon: usize, t: f64) -> Pose {
             }
         }
         Group::Basal | Group::Deuterostome => {
-            let bob = (tt * 1.3 + phase).sin() * 0.05;
-            let s = 1.0 + 0.06 * (tt * 1.7 + phase).sin();
+            let bob = w(1.3).sin() * 0.05;
+            let s = 1.0 + 0.06 * w(1.7).sin();
             Pose {
                 y_off: bob,
                 scale_x: s,
@@ -2494,8 +2495,8 @@ pub fn pose(group: Group, taxon: usize, t: f64) -> Pose {
             }
         }
         Group::Ecdysozoa | Group::Fish => {
-            let bob = (tt * 3.4 + phase).sin() * 0.06;
-            let rot = (tt * 4.2 + phase).sin() * 0.09;
+            let bob = w(3.4).sin() * 0.06;
+            let rot = w(4.2).sin() * 0.09;
             Pose {
                 y_off: bob,
                 rotation: rot,
@@ -2503,7 +2504,7 @@ pub fn pose(group: Group, taxon: usize, t: f64) -> Pose {
             }
         }
         _ => {
-            let walk = (tt * 2.1 + phase).sin();
+            let walk = w(2.1).sin();
             let bob = walk.abs() * 0.07 - 0.02;
             Pose {
                 y_off: -bob,

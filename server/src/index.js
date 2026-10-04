@@ -2,7 +2,7 @@
 // (schema.sql). Players are ranked by RAD, then by species found on any
 // Earth; on a tie, whoever got there first.
 //
-//   POST /score  {id, name, rad, species, animal}  -> {rank}
+//   POST /score  {id, name, rad, species, animal}  -> {rank, rad, species}
 //   GET  /top?id=<player id>                      -> {top, me, players}
 //
 // The game is client-side, so a score can always be forged. What the server
@@ -19,10 +19,15 @@ const NAME = /^[A-Za-z0-9 _-]{3,16}$/;
 const SPECIES_PER_HOUR = 20;
 const SPECIES_SLACK = 20;
 const RAD_PER_HOUR = 2;
-/// A first submit carries a whole save from before the leaderboard existed,
-/// so it can't be checked against time; it is only capped. Generous, so a
-/// long-time player is never shut out.
-const FIRST_RAD_MAX = 1000;
+/// A new ID has no past to check against, so its first score is cut down to
+/// what a new player can have: no RAD (that takes ending an Earth, far down
+/// the tree), and the Urmetazoan, two tutorial genomes of 3 cards and a few
+/// first waits (2 to 5 cards each), with room to spare. A save from before
+/// the leaderboard climbs from there at the per-hour rates above, so a made
+/// up ID can't take the top at once and a real long-time player catches up
+/// within a day.
+const FIRST_RAD_MAX = 0;
+const FIRST_SPECIES_MAX = 20;
 /// Submits closer together than this are refused.
 const MIN_GAP_MS = 5000;
 
@@ -73,22 +78,24 @@ async function submit(req, env) {
   const db = env.DB;
   const now = Date.now();
   const old = await db.prepare("SELECT * FROM scores WHERE player_id = ?").bind(id).first();
-  if (old) {
-    if (now - old.updated < MIN_GAP_MS) return fail("too fast", 429);
-    const hours = (now - old.updated) / 3.6e6;
-    if (species - old.species > SPECIES_SLACK + hours * SPECIES_PER_HOUR) {
-      return fail("implausible species", 422);
-    }
-    if (rad - old.rad > 1 + hours * RAD_PER_HOUR) return fail("implausible rad", 422);
-  } else if (rad > FIRST_RAD_MAX) {
-    return fail("implausible rad", 422);
-  }
+  if (old && now - old.updated < MIN_GAP_MS) return fail("too fast", 429);
 
-  // Best scores only ever grow; the name and the animal follow the latest.
-  const best = {
-    rad: Math.max(rad, old ? old.rad : 0),
-    species: Math.max(species, old ? old.species : 0),
-  };
+  // Best scores only ever grow, and no faster than the per-hour rates: a
+  // bigger jump is cut down rather than refused, so a long-time player
+  // climbs to their real score over a few submits. The name and the animal
+  // follow the latest.
+  let best;
+  if (old) {
+    const hours = (now - old.updated) / 3.6e6;
+    const maxSpecies = old.species + SPECIES_SLACK + Math.floor(hours * SPECIES_PER_HOUR);
+    const maxRad = old.rad + 1 + Math.floor(hours * RAD_PER_HOUR);
+    best = {
+      rad: Math.max(old.rad, Math.min(rad, maxRad)),
+      species: Math.max(old.species, Math.min(species, maxSpecies, taxa)),
+    };
+  } else {
+    best = { rad: Math.min(rad, FIRST_RAD_MAX), species: Math.min(species, FIRST_SPECIES_MAX) };
+  }
   const improved = !old || best.rad > old.rad || best.species > old.species;
   const reached = improved ? now : old.reached;
   await db
@@ -100,7 +107,7 @@ async function submit(req, env) {
     )
     .bind(id, name, best.rad, best.species, animal, reached, now)
     .run();
-  return json({ rank: await rankOf(db, { ...best, reached }) });
+  return json({ rank: await rankOf(db, { ...best, reached }), rad: best.rad, species: best.species });
 }
 
 async function top(url, env) {

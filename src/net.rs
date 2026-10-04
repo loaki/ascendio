@@ -92,82 +92,68 @@ mod backend {
 #[cfg(target_os = "android")]
 mod backend {
     //! Like `notify.rs`: everything goes through the activity object, as app
-    //! classes can't be looked up from the game thread.
+    //! classes can't be looked up from the game thread, and each call runs
+    //! in a local reference frame (`notify::with_jni`).
 
-    use macroquad::miniquad::native::android::{attach_jni_env, ndk_sys, ACTIVITY};
+    use macroquad::miniquad::native::android::{ndk_sys, ACTIVITY};
     use macroquad::miniquad::{call_int_method, call_object_method, call_void_method};
 
     use super::{failure_for, Failure, Reply};
-
-    unsafe fn clear(env: *mut ndk_sys::JNIEnv) {
-        if (**env).ExceptionCheck.unwrap()(env) != 0 {
-            (**env).ExceptionClear.unwrap()(env);
-        }
-    }
+    use crate::notify::{clear, rust_string, with_jni};
 
     unsafe fn jstring(env: *mut ndk_sys::JNIEnv, s: &str) -> ndk_sys::jstring {
         let c = std::ffi::CString::new(s.replace('\0', "")).unwrap_or_default();
         (**env).NewStringUTF.unwrap()(env, c.as_ptr())
     }
 
-    /// A Java string as Rust, `None` for null.
-    unsafe fn rust_string(env: *mut ndk_sys::JNIEnv, s: ndk_sys::jobject) -> Option<String> {
-        if s.is_null() {
-            return None;
-        }
-        let chars = (**env).GetStringUTFChars.unwrap()(env, s, std::ptr::null_mut());
-        let out = std::ffi::CStr::from_ptr(chars)
-            .to_string_lossy()
-            .into_owned();
-        (**env).ReleaseStringUTFChars.unwrap()(env, s, chars);
-        (**env).DeleteLocalRef.unwrap()(env, s);
-        Some(out)
-    }
-
     pub struct Request(i32);
 
     pub fn request(method: &str, url: &str, body: Option<&str>) -> Request {
         unsafe {
-            let env = attach_jni_env();
-            let (m, u, b) = (
-                jstring(env, method),
-                jstring(env, url),
-                jstring(env, body.unwrap_or("")),
-            );
-            let id = call_int_method!(
-                env,
-                ACTIVITY,
-                "httpStart",
-                "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)I",
-                m,
-                u,
-                b
-            );
-            clear(env);
-            for s in [m, u, b] {
-                (**env).DeleteLocalRef.unwrap()(env, s);
-            }
-            Request(id)
+            with_jni(|env| {
+                let (m, u, b) = (
+                    jstring(env, method),
+                    jstring(env, url),
+                    jstring(env, body.unwrap_or("")),
+                );
+                let id = call_int_method!(
+                    env,
+                    ACTIVITY,
+                    "httpStart",
+                    "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)I",
+                    m,
+                    u,
+                    b
+                );
+                clear(env);
+                Request(id)
+            })
         }
     }
 
     impl Request {
         pub fn poll(&mut self) -> Option<Reply> {
             unsafe {
-                let env = attach_jni_env();
-                // 0 in flight, 1 no answer at all, else the HTTP status.
-                let status = call_int_method!(env, ACTIVITY, "httpStatus", "(I)I", self.0);
-                clear(env);
-                if status == 0 {
-                    return None;
-                }
-                let text =
-                    call_object_method!(env, ACTIVITY, "httpTake", "(I)Ljava/lang/String;", self.0);
-                clear(env);
-                let text = rust_string(env, text).unwrap_or_default();
-                Some(match status {
-                    1 => Err(Failure::Retry),
-                    code => failure_for(code as u32).map_or(Ok(text), Err),
+                with_jni(|env| {
+                    // 0 in flight, 1 no answer at all, else the HTTP status.
+                    let status = call_int_method!(env, ACTIVITY, "httpStatus", "(I)I", self.0);
+                    clear(env);
+                    if status == 0 {
+                        return None;
+                    }
+                    let text = call_object_method!(
+                        env,
+                        ACTIVITY,
+                        "httpTake",
+                        "(I)Ljava/lang/String;",
+                        self.0
+                    );
+                    clear(env);
+                    let text = rust_string(env, text).unwrap_or_default();
+                    Some(match status {
+                        1 => Err(Failure::Retry),
+                        code => failure_for(code as u32).map_or(Ok(text), Err),
+                    })
                 })
             }
         }
@@ -177,35 +163,37 @@ mod backend {
     /// `None`, later calls return the answer once (`Some(None)` if cancelled).
     pub fn ask_text(title: &str, current: &str) -> Option<Option<String>> {
         unsafe {
-            let env = attach_jni_env();
-            let status = call_int_method!(env, ACTIVITY, "promptStatus", "()I");
-            clear(env);
-            match status {
-                // Nothing asked yet: open the dialog.
-                0 => {
-                    let (t, c) = (jstring(env, title), jstring(env, current));
-                    call_void_method!(
-                        env,
-                        ACTIVITY,
-                        "promptOpen",
-                        "(Ljava/lang/String;Ljava/lang/String;)V",
-                        t,
-                        c
-                    );
-                    clear(env);
-                    (**env).DeleteLocalRef.unwrap()(env, t);
-                    (**env).DeleteLocalRef.unwrap()(env, c);
-                    None
+            with_jni(|env| {
+                let status = call_int_method!(env, ACTIVITY, "promptStatus", "()I");
+                clear(env);
+                match status {
+                    // Nothing asked yet: open the dialog.
+                    0 => {
+                        let (t, c) = (jstring(env, title), jstring(env, current));
+                        call_void_method!(
+                            env,
+                            ACTIVITY,
+                            "promptOpen",
+                            "(Ljava/lang/String;Ljava/lang/String;)V",
+                            t,
+                            c
+                        );
+                        None
+                    }
+                    // Still open.
+                    1 => None,
+                    _ => {
+                        let text = call_object_method!(
+                            env,
+                            ACTIVITY,
+                            "promptTake",
+                            "()Ljava/lang/String;"
+                        );
+                        clear(env);
+                        Some(rust_string(env, text))
+                    }
                 }
-                // Still open.
-                1 => None,
-                _ => {
-                    let text =
-                        call_object_method!(env, ACTIVITY, "promptTake", "()Ljava/lang/String;");
-                    clear(env);
-                    Some(rust_string(env, text))
-                }
-            }
+            })
         }
     }
 }

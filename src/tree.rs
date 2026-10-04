@@ -201,7 +201,11 @@ const ROWS: &[Row] = &[
 ];
 
 pub struct Taxon {
+    /// The English name: also the key `ecology`, the sprites and the docs
+    /// know it by. What the player reads is `label`.
     pub name: &'static str,
+    /// The French name (`names.rs`).
+    pub fr: &'static str,
     pub clade: &'static str,
     pub mya: f32,
     pub parent: Option<usize>,
@@ -213,6 +217,15 @@ pub struct Taxon {
 }
 
 impl Taxon {
+    /// The name in the language the player picked.
+    pub fn label(&self) -> &'static str {
+        if crate::names::french() {
+            self.fr
+        } else {
+            self.name
+        }
+    }
+
     /// `"800 Ma"` / `"0.3 Ma"` / `"20,000 years"`.
     pub fn age_label(&self) -> String {
         if self.mya < 0.1 {
@@ -236,6 +249,7 @@ impl Phylogeny {
             .iter()
             .map(|&(name, clade, mya, parent, group)| Taxon {
                 name,
+                fr: crate::names::of(name),
                 clade,
                 mya,
                 parent: usize::try_from(parent).ok(),

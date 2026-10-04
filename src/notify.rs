@@ -40,16 +40,49 @@ mod android {
     use macroquad::miniquad::{call_bool_method, call_void_method};
 
     /// Drops a Java exception rather than letting the next JNI call abort.
-    unsafe fn clear(env: *mut ndk_sys::JNIEnv) {
+    pub unsafe fn clear(env: *mut ndk_sys::JNIEnv) {
         if (**env).ExceptionCheck.unwrap()(env) != 0 {
             (**env).ExceptionClear.unwrap()(env);
         }
     }
 
-    unsafe fn call(method: &str) {
+    /// Runs JNI calls in a local reference frame of their own. The game
+    /// thread never returns to Java, so a local reference is only freed by
+    /// hand, and miniquad's `call_method!` leaks the class it looks up:
+    /// without a frame they pile up until the VM aborts (512 on Android 7).
+    /// Nothing `f` gets from Java outlives it.
+    pub unsafe fn with_jni<R>(f: impl FnOnce(*mut ndk_sys::JNIEnv) -> R) -> R {
         let env = attach_jni_env();
-        call_void_method!(env, ACTIVITY, method, "()V");
+        let framed = (**env).PushLocalFrame.unwrap()(env, 16) == 0;
         clear(env);
+        let out = f(env);
+        clear(env);
+        if framed {
+            (**env).PopLocalFrame.unwrap()(env, std::ptr::null_mut());
+        }
+        out
+    }
+
+    /// A Java string as Rust, `None` for null.
+    pub unsafe fn rust_string(env: *mut ndk_sys::JNIEnv, s: ndk_sys::jobject) -> Option<String> {
+        if s.is_null() {
+            return None;
+        }
+        let chars = (**env).GetStringUTFChars.unwrap()(env, s, std::ptr::null_mut());
+        if chars.is_null() {
+            return None;
+        }
+        let out = std::ffi::CStr::from_ptr(chars)
+            .to_string_lossy()
+            .into_owned();
+        (**env).ReleaseStringUTFChars.unwrap()(env, s, chars);
+        Some(out)
+    }
+
+    unsafe fn call(method: &str) {
+        with_jni(|env| {
+            call_void_method!(env, ACTIVITY, method, "()V");
+        });
     }
 
     pub fn supported() -> bool {
@@ -59,10 +92,7 @@ mod android {
     /// Whether Android lets the app post notifications at all.
     pub fn allowed() -> bool {
         unsafe {
-            let env = attach_jni_env();
-            let ok = call_bool_method!(env, ACTIVITY, "notificationsAllowed", "()Z");
-            clear(env);
-            ok != 0
+            with_jni(|env| call_bool_method!(env, ACTIVITY, "notificationsAllowed", "()Z") != 0)
         }
     }
 
@@ -81,19 +111,18 @@ mod android {
             return;
         };
         unsafe {
-            let env = attach_jni_env();
-            let jbody = (**env).NewStringUTF.unwrap()(env, body.as_ptr());
-            let ms = (delay_secs.max(0.0) * 1000.0) as ndk_sys::jlong;
-            call_void_method!(
-                env,
-                ACTIVITY,
-                "scheduleGenome",
-                "(JLjava/lang/String;)V",
-                ms,
-                jbody
-            );
-            clear(env);
-            (**env).DeleteLocalRef.unwrap()(env, jbody);
+            with_jni(|env| {
+                let jbody = (**env).NewStringUTF.unwrap()(env, body.as_ptr());
+                let ms = (delay_secs.max(0.0) * 1000.0) as ndk_sys::jlong;
+                call_void_method!(
+                    env,
+                    ACTIVITY,
+                    "scheduleGenome",
+                    "(JLjava/lang/String;)V",
+                    ms,
+                    jbody
+                );
+            });
         }
     }
 

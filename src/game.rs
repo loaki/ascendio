@@ -345,6 +345,10 @@ pub struct Game {
     /// The last animal discovered, for the leaderboard.
     #[serde(default)]
     pub last_found: Option<usize>,
+    /// Boons the waiting genome offers, decided by the keystones its wait
+    /// ran with. Absent in older saves: the equipped ones decide.
+    #[serde(default)]
+    pub next_boons: Option<u8>,
 }
 
 impl Game {
@@ -388,6 +392,7 @@ impl Game {
             doomed: false,
             doom_risk: 0.0,
             last_found: None,
+            next_boons: None,
         };
         game.fossil[Phylogeny::ROOT] = true;
         game.refresh_levels();
@@ -425,6 +430,10 @@ impl Game {
             || game.found_ma.len() != saved
             || game.keystones.iter().any(|&p| p >= saved)
             || game.last_found.is_some_and(|t| t >= saved)
+            || game
+                .cycle
+                .is_some_and(|c| c.launched_keystones().any(|k| k >= saved))
+            || game.genome.iter().flatten().any(|c| c.taxon >= saved)
         {
             return None;
         }
@@ -808,7 +817,7 @@ impl Game {
                         .filter(|g| g.copyable())
                         .map(|g| g.scaled(f))
                         .collect();
-                    r.note = Some(format!("copying {}", self.phy.taxa[ks[j]].name));
+                    r.note = Some(format!("copying {}", self.phy.taxa[ks[j]].label()));
                     r.copied_from = Some(ks[j]);
                 }
                 None => {
@@ -900,7 +909,7 @@ impl Game {
             r.gains.iter().find_map(|g| match *g {
                 Gain::TempMin(t) if v <= t => Some(format!(
                     "{} holds it at {} or warmer",
-                    self.phy.taxa[r.taxon].name,
+                    self.phy.taxa[r.taxon].label(),
                     planet::temperature_label(t)
                 )),
                 _ => None,
@@ -910,9 +919,19 @@ impl Game {
 
     /// Advances what the keystones a finished wait ran with keep track of,
     /// on the planet it ran on: the Tuatara's and the Coelacanth's charges,
-    /// the Dodo wearing out.
+    /// the Dodo wearing out. A growing keystone that sat the wait out loses
+    /// its charges, as an asleep one does, so they can't be banked by
+    /// unequipping it for a wait that would empty them.
     fn advance_keystones(&mut self, launched: Planet, ma: u32) {
-        for k in self.active_keystones() {
+        let ran = self.active_keystones();
+        for k in 0..self.phy.len() {
+            if !ran.contains(&k)
+                && matches!(self.phy.taxa[k].eco.rule, Rule::Changing | Rule::Stasis)
+            {
+                self.growth[k] = 0;
+            }
+        }
+        for k in ran {
             let rule = self.phy.taxa[k].eco.rule;
             let awake = self.dormant_reason(k).is_none();
             match rule {
@@ -1117,6 +1136,10 @@ impl Game {
 
     /// A finished cycle becomes a genome waiting to be opened.
     pub fn tick(&mut self, now: f64) {
+        // A clock set back (web) mustn't stretch the wait past its length.
+        if let Some(c) = &mut self.cycle {
+            c.started_at = c.started_at.min(now);
+        }
         let Some(cycle) = self.cycle else { return };
         if !cycle.is_done(now) {
             return;
@@ -1137,10 +1160,14 @@ impl Game {
         // Decided with the genome, so reopening the app can't reroll it.
         // The chance is per 4h and compounds, so splitting a wait into
         // shorter ones never rolls it more often.
-        let per_4h = self.effects().doom;
+        let e = self.effects();
+        let per_4h = e.doom;
         let doom = 1.0 - (1.0 - per_4h).powf(cycle.hours / wait::DEFAULT_HOURS);
         self.doom_risk = doom;
         self.doomed = doom > 0.0 && self.rng.chance(doom);
+        // Likewise the boons: keystones swapped during the wait only count
+        // from the next one.
+        self.next_boons = Some(if e.fewer_boons { 2 } else { 3 });
         self.earn_keystone_points(cycle.hours);
         self.last_hours = cycle.hours;
         self.advance_keystones(cycle.launched, cycle.ma);
@@ -1222,7 +1249,11 @@ impl Game {
             Boon::Tailwind,
             Boon::Tectonics,
         ];
-        let n = if self.effects().fewer_boons { 2 } else { 3 };
+        let n = match self.next_boons.take() {
+            Some(n) => usize::from(n),
+            None if self.effects().fewer_boons => 2,
+            None => 3,
+        };
         let mut offer = Vec::with_capacity(n);
         while offer.len() < n && !pool.is_empty() {
             let b = pool.swap_remove((self.rng.next_u64() % pool.len() as u64) as usize);
@@ -1286,6 +1317,7 @@ impl Game {
         self.keystones.clear();
         self.boon = None;
         self.boon_offer = None;
+        self.next_boons = None;
         self.growth = vec![0; n];
         self.gone = vec![false; n];
         self.last_launched = None;
@@ -1613,6 +1645,29 @@ mod tests {
         assert!(
             Game::from_json("{\"dna\": 5}", 0.0).is_none(),
             "old saves are discarded"
+        );
+    }
+
+    #[test]
+    fn a_save_naming_taxa_past_the_tree_is_rejected() {
+        let mut g = Game::new(0.0);
+        let mut now = 0.0;
+        run_cycle(&mut g, &mut now);
+        g.accelerate(now);
+        now += g.cycle.unwrap().duration + 1.0;
+        g.tick(now);
+        let v: serde_json::Value = serde_json::from_str(&g.to_json()).unwrap();
+        assert!(Game::from_json(&v.to_string(), now).is_some());
+        let mut bad = v.clone();
+        bad["genome"][0]["taxon"] = 9999.into();
+        assert!(Game::from_json(&bad.to_string(), now).is_none(), "a card");
+        let mut g = Game::new(0.0);
+        g.accelerate(0.0);
+        let mut bad: serde_json::Value = serde_json::from_str(&g.to_json()).unwrap();
+        bad["cycle"]["keystones"][0] = 9999.into();
+        assert!(
+            Game::from_json(&bad.to_string(), 0.0).is_none(),
+            "a keystone"
         );
     }
 
@@ -2250,6 +2305,71 @@ mod tests {
         assert_eq!(g.forecast().odds.morph_mult, plain * 3.0);
         assert!(g.effects().fewer_boons);
         assert_eq!(g.roll_boons().len(), 2);
+    }
+
+    #[test]
+    fn keystones_swapped_during_a_wait_count_from_the_next_one() {
+        let mut g = Game::new(0.0);
+        g.planet = Planet {
+            land: 3,
+            vegetation: 3,
+            oxygen: 3,
+            temperature: 3,
+            volcanism: 0,
+        };
+        let mut now = 0.0;
+        let bird = equip(&mut g, "Archaeopteryx");
+        assert!(g.accelerate(now));
+        assert!(g.toggle_keystone(bird), "unequipped while time runs");
+        now += g.cycle.unwrap().duration + 1.0;
+        g.tick(now);
+        g.open_genome(now);
+        assert_eq!(g.boon_offer.as_ref().unwrap().len(), 2, "launched with it");
+        g.choose_boon(0);
+        // Equipped again mid-wait, it only takes a boon from the next one.
+        assert!(g.accelerate(now));
+        assert!(g.toggle_keystone(bird));
+        now += g.cycle.unwrap().duration + 1.0;
+        g.tick(now);
+        g.open_genome(now);
+        assert_eq!(
+            g.boon_offer.as_ref().unwrap().len(),
+            3,
+            "launched without it"
+        );
+    }
+
+    #[test]
+    fn charges_cant_be_banked_by_sitting_a_wait_out() {
+        let mut g = Game::new(0.0);
+        let cool = Planet {
+            land: 3,
+            vegetation: 3,
+            oxygen: 3,
+            temperature: 2,
+            volcanism: 0,
+        };
+        g.planet = cool;
+        let tua = equip(&mut g, "Tuatara");
+        g.advance_keystones(cool, u32::from(CHARGE_MA));
+        assert_eq!(g.growth[tua], CHARGE_MA);
+        // Unequipped for a wait on the same planet, which would empty them.
+        assert!(g.toggle_keystone(tua));
+        g.advance_keystones(cool, u32::from(CHARGE_MA));
+        assert_eq!(g.growth[tua], 0, "sitting out empties them too");
+        // Unequipped mid-wait, it still ran it: the launch set counts.
+        assert!(g.toggle_keystone(tua));
+        g.planet = Planet { oxygen: 4, ..cool };
+        g.advance_keystones(g.planet, u32::from(CHARGE_MA));
+        assert_eq!(g.growth[tua], CHARGE_MA);
+        assert!(g.accelerate(0.0));
+        assert!(g.toggle_keystone(tua));
+        let now = g.cycle.unwrap().duration + 1.0;
+        g.tick(now);
+        assert_eq!(
+            g.growth[tua], 0,
+            "a wait on the same planet, launched with it"
+        );
     }
 
     #[test]

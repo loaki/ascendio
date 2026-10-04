@@ -32,8 +32,11 @@ how to run it.
    beats two 3h ones. Each hour is 10 Ma. The countdown runs on the wall
    clock, so it keeps going with the app closed; on Android it's anchored
    to the phone's uptime (`src/clock.rs`), so changing the phone's time
-   doesn't skip it. Nothing can be changed
-   until it ends.
+   doesn't skip it. The wait can be cancelled (`CANCEL`, tapped twice):
+   nothing is produced and the planet is left as launched, to reshape.
+   Keystones can be swapped while it runs, but the wait keeps the ones it
+   was launched with (its genome, boons, points, risk and charges): a swap
+   counts from the next wait.
 3. **Evolve the genome** (`src/opening.rs`). A 3D double helix gives no
    hint of what's inside. Each of three taps mutates a third of its base
    pairs; the third collapses it into a core that detonates like a supernova
@@ -45,15 +48,19 @@ how to run it.
 4. **Steer.** Pick 1 of 3 boons for the next cycle (+25% discovery, +1
    card, a guaranteed Rare, x4 morphs, less wait, more points), and equip
    up to 3 discovered animals as **keystones**. Each adds luck, cards,
-   discovery, morphs, a shorter wait or points; a few have a special rule
+   discovery, morphs, a shorter wait (-30% at most, Tailwind on top) or a
+   flat +1 point per 4h; a few have a special rule
    (Octopus, Chimpanzee and Parrot copy their kin above, a legendary perk
    with a catch...), and three keystones of one biome add its bonus. A
    keystone works only while the planet suits it: an unsuited one is
-   asleep. Human doubles Luck and adds 2 cards, but a 4h wait has 1 in 5 to
-   end the Earth (`src/collapse.rs`): a new Earth starts from the
+   asleep. Human doubles the keystones' and biomes' Luck (before their cap
+   of 20) and adds 2 cards, but a 4h wait has 1 in 5 to end the Earth
+   (10.6% at 2h, 28.5% at 6h; `src/collapse.rs`): a new Earth starts from the
    Urmetazoan with +1 RAD (rarer cards, more morphs), and everything found
-   stays as a fossil to find again. A morph changes what it does (Amber x2, Albino
-   x1.5 but sunburns, Melanistic ignores temperature, Giant +1 adjustment point).
+   stays as a fossil to find again (the tutorial doesn't replay). A morph
+   changes what it does (Amber x2, Albino x1.5 but sunburns, Melanistic
+   ignores temperature, Giant +1 adjustment point); a Point keystone's +1
+   stays +1.
 
 What a genome can hold is filtered twice (`src/genome.rs`): the tree
 (parent found, itself not) and the planet (each taxon's habitat and needs
@@ -61,7 +68,8 @@ in `src/ecology.rs`, e.g. frogs need fresh water, a mammoth needs an Ice
 age). Seven biomes (Ice age, Coal swamp, Reef sea, Savanna, Jungle,
 Hothouse, Primordial sea) rule each other out, and the odds follow how much
 of the planet each habitat covers.
-Then each card rolls a rarity tier (60/25/11/3.5/0.5%), whether it's a new
+Then each card rolls a rarity tier (60/25/11/3.5/0.5%, shifted by luck,
+50 at most), whether it's a new
 species or one you own
 (discovery: 15% at 2h, 30% at 4h, 45% at 6h, plus keystones), and a morph
 (giant 1/40, albino and melanistic 1/128, amber 1/1024). Nothing is ever sold.
@@ -87,8 +95,8 @@ genome) is designed in `docs/DESIGN.md` but not implemented yet.
 - **Leaderboard** (the trophy in the top bar): the top 50 players by RAD,
   then species found on any Earth, each with the last animal they found;
   your own row stays pinned at the bottom.
-- **Settings** (the gear): your leaderboard name, notifications and
-  brightness.
+- **Settings** (the gear): your leaderboard name, notifications,
+  brightness and the language of species names (English or French).
 
 ## Engine choice: macroquad
 
@@ -131,14 +139,15 @@ cargo run --release
 # A scratch game that shapes, runs and opens cycles by itself.
 ASCENDIO_AUTOPLAY=1 cargo run --release
 
-# Make time pass 3600x faster (an hour per second) on a real save.
+# Make time pass 3600x faster (an hour per second), reading the real
+# save without writing it.
 ASCENDIO_TIME_SCALE=3600 cargo run --release
 
 # Dev keys: T ends the running cycle now, R resets to a fresh game.
 ASCENDIO_DEV=1 cargo run --release
 
 # Write a PNG of the framebuffer after N seconds and exit, without touching
-# the real save. ASCENDIO_SHOT_MODE=map|spiral|dial|keystones|settings|leaderboard|biomes|collapse|backdrop picks the screen.
+# the real save. ASCENDIO_SHOT_MODE=map|spiral|dial|detail|keystones|settings|leaderboard|biomes|collapse|backdrop picks the screen.
 ASCENDIO_SCRATCH=1 ASCENDIO_SHOT=shot.png ASCENDIO_SHOT_AFTER=2 cargo run --release
 
 # ASCENDIO_SHOT_EVERY=0.0833 also writes every frame (out_000.png, ...) at
@@ -299,6 +308,7 @@ src/
 ├── pixel.rs     the dithered low-res canvas both backdrops paint into
 ├── ui.rs        HUD, lever panel, bottom bar, keystones, animal page, boons, settings
 ├── settings.rs  the player's settings, saved apart from the game
+├── names.rs     the animals' French names
 ├── notify.rs    the "genome ready" notification (Android, over JNI)
 ├── leaderboard.rs  the online board: submitting, fetching, player names
 ├── net.rs       HTTP and the name text box, per platform

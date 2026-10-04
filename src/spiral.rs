@@ -6,6 +6,7 @@ use macroquad::prelude::*;
 
 use crate::game::Game;
 use crate::tree::Phylogeny;
+use crate::view;
 
 /// Angular step between consecutive generations. ~7 per revolution.
 const DTHETA: f32 = 0.90;
@@ -29,6 +30,12 @@ const SPUR_SPREAD: f32 = 0.55;
 const SNAP_SPEED: f32 = 11.0;
 const FLING_FRICTION: f32 = 4.5;
 const FLING_STOP: f32 = 0.35;
+/// How fast a held finger's swipe speed dies away (per second, as a rate).
+const HOLD_DECAY: f32 = 20.0;
+/// How long the finger must stay still before the swipe starts losing speed:
+/// touch can report slower than the screen draws (60 Hz on a 120 Hz screen),
+/// so a frame without a move isn't yet a stop.
+const HOLD_GRACE: f32 = 0.05;
 /// Near the coil's centre a pixel of drag is an enormous angle, so the radius
 /// used for that conversion is floored at this fraction of the coil radius.
 const MIN_DRAG_RADIUS: f32 = 0.45;
@@ -55,6 +62,8 @@ pub struct Nav {
     /// Generations per second while flinging.
     vel: f32,
     flinging: bool,
+    /// Seconds the finger has been down without moving the coil.
+    still: f32,
 }
 
 impl Nav {
@@ -67,6 +76,7 @@ impl Nav {
             t_target: 0.0,
             vel: 0.0,
             flinging: false,
+            still: 0.0,
         };
         nav.rebuild(game);
         nav
@@ -139,8 +149,18 @@ impl Nav {
         if dt > 0.0 {
             // Smoothed, so one jittery frame cannot define the fling.
             self.vel = self.vel * 0.6 + (-generations / dt) * 0.4;
+            self.still = 0.0;
         }
         self.flinging = false;
+    }
+
+    /// The finger is down but stayed still this frame: the swipe it may
+    /// end with no longer carries the speed it had.
+    pub fn hold(&mut self, dt: f32) {
+        self.still += dt;
+        if self.still > HOLD_GRACE {
+            self.vel *= (-HOLD_DECAY * dt).exp();
+        }
     }
 
     pub fn release(&mut self) {
@@ -188,12 +208,12 @@ impl Nav {
 // --- screen regions ---------------------------------------------------------
 
 pub fn focus_point() -> Vec2 {
-    Vec2::new(screen_width() * 0.5, screen_height() * 0.44)
+    Vec2::new(view::width() * 0.5, screen_height() * 0.44)
 }
 
 /// Distance from the focus to the point the coil tightens onto.
 pub fn coil_radius() -> f32 {
-    (screen_width() * 0.30).min(screen_height() * 0.11)
+    (view::width() * 0.30).min(screen_height() * 0.11)
 }
 
 pub fn label_px(k: f32) -> f32 {
@@ -291,7 +311,7 @@ impl Frame {
         // A long name on the outer coil would otherwise run off the edge.
         let on_screen = |pos: Vec2, half: Vec2| -> Vec2 {
             let m = half.x + k * 0.03;
-            Vec2::new(pos.x.clamp(m, (screen_width() - m).max(m)), pos.y)
+            Vec2::new(pos.x.clamp(m, (view::width() - m).max(m)), pos.y)
         };
 
         let lo = (t + D_BACK).max(0.0).floor() as usize;
@@ -371,19 +391,19 @@ impl Frame {
 
     /// The taxon a tap at `p` landed on.
     pub fn hit(&self, p: Vec2) -> Option<usize> {
-        // Spurs sit on top of the coil, so they win ties.
-        let mut spurs: Vec<&Spur> = self.spurs.iter().collect();
-        spurs.sort_by(|a, b| a.d.abs().total_cmp(&b.d.abs()));
-        if let Some(s) = spurs.into_iter().find(|s| inside(p, s.pos, s.half)) {
-            return Some(s.taxon);
-        }
-
+        // Beads are drawn over the spurs, so they win ties.
         let mut beads: Vec<&Bead> = self.beads.iter().collect();
         beads.sort_by(|a, b| a.d.abs().total_cmp(&b.d.abs()));
-        beads
+        if let Some(b) = beads.into_iter().find(|b| inside(p, b.pos, b.half)) {
+            return Some(b.taxon);
+        }
+
+        let mut spurs: Vec<&Spur> = self.spurs.iter().collect();
+        spurs.sort_by(|a, b| a.d.abs().total_cmp(&b.d.abs()));
+        spurs
             .into_iter()
-            .find(|b| inside(p, b.pos, b.half))
-            .map(|b| b.taxon)
+            .find(|s| inside(p, s.pos, s.half))
+            .map(|s| s.taxon)
     }
 }
 
@@ -393,12 +413,12 @@ fn inside(p: Vec2, center: Vec2, half: Vec2) -> bool {
 
 fn chip_label(game: &Game, taxon: usize) -> String {
     if game.is_fossil(taxon) {
-        return game.taxon(taxon).name.to_string();
+        return game.taxon(taxon).label().to_string();
     }
     if !game.unlocked[taxon] {
         return "???".to_string();
     }
-    let name = game.taxon(taxon).name;
+    let name = game.taxon(taxon).label();
     match game.level[taxon] {
         0 | 1 => name.to_string(),
         lv => format!("{name} ·{lv}"),

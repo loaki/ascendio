@@ -11,6 +11,7 @@ mod genome;
 mod genome_bg;
 mod layout;
 mod leaderboard;
+mod names;
 mod net;
 mod notify;
 mod opening;
@@ -33,6 +34,7 @@ use collapse::Collapse;
 use game::{Game, Phase};
 use layout::Layout;
 use leaderboard::{Leaderboard, Score};
+use names::Language;
 use opening::Opening;
 use planet::Lever;
 use settings::Settings;
@@ -59,6 +61,9 @@ impl Mode {
         matches!(self, Mode::Settings | Mode::Leaderboard)
     }
 }
+
+/// The longest frame the animations step through at once.
+const MAX_DT: f32 = 0.1;
 
 /// Seconds between autosaves.
 const SAVE_INTERVAL: f32 = 3.0;
@@ -88,6 +93,8 @@ enum ShotKind {
     Collapse,
     /// The planet alone, no spiral or UI.
     Backdrop,
+    /// The page of the most advanced animal.
+    Detail,
 }
 
 impl ShotKind {
@@ -102,6 +109,7 @@ impl ShotKind {
             "biomes" => Self::Biomes,
             "collapse" => Self::Collapse,
             "backdrop" => Self::Backdrop,
+            "detail" => Self::Detail,
             _ => return None,
         })
     }
@@ -110,7 +118,7 @@ impl ShotKind {
     fn mode(self) -> Option<Mode> {
         match self {
             Self::Map | Self::Biomes => Some(Mode::Map),
-            Self::Spiral | Self::Dial | Self::Backdrop => Some(Mode::Spiral),
+            Self::Spiral | Self::Dial | Self::Backdrop | Self::Detail => Some(Mode::Spiral),
             Self::Keystones => Some(Mode::Keystones),
             Self::Settings => Some(Mode::Settings),
             Self::Leaderboard => Some(Mode::Leaderboard),
@@ -138,12 +146,18 @@ struct Dev {
     autoplay: bool,
     /// `ASCENDIO_DEV`: T ends the running cycle, R resets the game.
     keys: bool,
-    /// Off for autoplay and `ASCENDIO_SCRATCH`: never touch the real save.
+    /// Off for autoplay and `ASCENDIO_SCRATCH`: start from a fresh game.
+    load: bool,
+    /// Writes the real save. Off as well with a sped-up clock or a forced
+    /// planet: they play on the real save without changing it.
     persist: bool,
+    /// Goes on the leaderboard: a real game, played in real time, never a
+    /// dev run.
+    submit: bool,
     /// `ASCENDIO_DEMO_TAPS=n`: start on a ready genome and tap it `n` times.
     demo_taps: Option<u32>,
     /// `ASCENDIO_SHOT=out.png`, `ASCENDIO_SHOT_AFTER` (default 5) and
-    /// `ASCENDIO_SHOT_MODE=map|spiral|dial|keystones|settings|leaderboard|biomes|collapse|backdrop`.
+    /// `ASCENDIO_SHOT_MODE=map|spiral|dial|keystones|settings|leaderboard|biomes|collapse|backdrop|detail`.
     shot: Option<Shot>,
 }
 
@@ -158,14 +172,21 @@ impl Dev {
                 .and_then(|m| ShotKind::parse(&m)),
             every: env_parse("ASCENDIO_SHOT_EVERY").filter(|&v: &f32| v > 0.0),
         });
+        let time_scale = env_parse("ASCENDIO_TIME_SCALE")
+            .filter(|&v: &f64| v > 0.0)
+            .unwrap_or(1.0);
+        let keys = autoplay || env_flag("ASCENDIO_DEV");
+        let demo_taps = env_parse("ASCENDIO_DEMO_TAPS");
+        let load = !autoplay && !env_flag("ASCENDIO_SCRATCH");
+        let persist = load && time_scale == 1.0 && Self::planet_override().is_none();
         Self {
-            time_scale: env_parse("ASCENDIO_TIME_SCALE")
-                .filter(|&v: &f64| v > 0.0)
-                .unwrap_or(1.0),
+            time_scale,
             autoplay,
-            keys: autoplay || env_flag("ASCENDIO_DEV"),
-            persist: !autoplay && !env_flag("ASCENDIO_SCRATCH"),
-            demo_taps: env_parse("ASCENDIO_DEMO_TAPS"),
+            keys,
+            load,
+            persist,
+            submit: persist && !keys && shot.is_none() && demo_taps.is_none(),
+            demo_taps,
             shot,
         }
     }
@@ -206,6 +227,38 @@ fn window_conf() -> Conf {
         fullscreen: false,
         ..Default::default()
     }
+}
+
+/// Back with nothing open: the desktop quits (returns false). Android has
+/// no quitting, so the game goes to the background like Home; the web page
+/// just stays.
+#[cfg(target_os = "android")]
+fn leave() -> bool {
+    use macroquad::miniquad::call_method;
+    use macroquad::miniquad::native::android::ACTIVITY;
+    unsafe {
+        notify::with_jni(|env| {
+            call_method!(
+                CallBooleanMethod,
+                env,
+                ACTIVITY,
+                "moveTaskToBack",
+                "(Z)Z",
+                1i32
+            );
+        });
+    }
+    true
+}
+
+#[cfg(target_arch = "wasm32")]
+fn leave() -> bool {
+    true
+}
+
+#[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
+fn leave() -> bool {
+    false
 }
 
 /// The deepest taxon just discovered: where the spiral glides to.
@@ -268,7 +321,7 @@ struct App {
     notify_allowed: bool,
     allowed_timer: f32,
     /// The backdrop's clock: it hurries while time runs, without jumps.
-    world_t: f32,
+    world_t: f64,
     elapsed: f32,
     /// Frames written by `ASCENDIO_SHOT_EVERY`.
     frame_no: u32,
@@ -284,10 +337,16 @@ impl App {
             save::clear();
         }
         // A sped-up dev clock never becomes the real one.
-        let mut clock = clock::Clock::load(dev.persist && dev.time_scale == 1.0);
+        let mut clock = clock::Clock::load(dev.load && dev.time_scale == 1.0);
         let now = clock.now(dev.time_scale);
-        let mut game = if dev.persist {
-            Game::load(now).unwrap_or_else(|| Game::new(now))
+        let mut game = if dev.load {
+            Game::load(now).unwrap_or_else(|| {
+                // Only a run that will save over it needs the old one kept.
+                if dev.persist {
+                    save::keep_bad_save();
+                }
+                Game::new(now)
+            })
         } else {
             Game::new(now)
         };
@@ -295,11 +354,12 @@ impl App {
             game.planet = p;
             game.shaped_from = p;
         }
-        let mut settings = if dev.persist {
-            Settings::load()
+        let mut settings = if dev.load {
+            Settings::load(dev.persist)
         } else {
             Settings::default()
         };
+        names::set(settings.language);
         if settings.ensure_player(leaderboard::id_seed()) && dev.persist {
             settings.save();
         }
@@ -322,13 +382,7 @@ impl App {
             input: Input::new(),
             mode: Mode::Spiral,
             page_from: Mode::Spiral,
-            // Only a real game, played in real time, goes on the board.
-            leaderboard: Leaderboard::new(
-                dev.persist
-                    && dev.time_scale == 1.0
-                    && dev.shot.is_none()
-                    && dev.demo_taps.is_none(),
-            ),
+            leaderboard: Leaderboard::new(dev.submit),
             typing: None,
             asking_name: false,
             keystones: KeystoneView::default(),
@@ -380,6 +434,7 @@ impl App {
             supported: notify::supported(),
             allowed: self.notify_allowed,
             brightness: self.settings.brightness,
+            language: self.settings.language,
             name: self.settings.name.clone(),
             typing: self.typing.clone(),
         }
@@ -414,22 +469,25 @@ impl App {
     /// EVOLVE IT: the genome opens, unless Human's gamble ends the Earth.
     fn evolve(&mut self, now: f64) {
         if self.game.doomed {
-            self.collapse = Some(Collapse::new());
+            self.collapse = Some(Collapse::with_risk(self.game.doom_risk));
         } else {
-            self.opening = Some(Opening::new(&self.game, (now * 1000.0) as u32));
+            // Milliseconds overflow a u32: fold the high half in.
+            let ms = (now * 1000.0) as u64;
+            self.opening = Some(Opening::new(&self.game, (ms ^ (ms >> 32)) as u32));
         }
     }
 
     /// One frame: input, then the clock-driven updates, then drawing.
     /// Returns false to quit.
     fn frame(&mut self) -> bool {
-        // Recording frames: a fixed step, however slow the export.
+        // Recording frames: a fixed step, however slow the export. Otherwise
+        // capped, so coming back from the background is not one giant step.
         let dt = self
             .dev
             .shot
             .as_ref()
             .and_then(|s| s.every)
-            .unwrap_or_else(get_frame_time);
+            .unwrap_or_else(|| get_frame_time().min(MAX_DT));
         self.elapsed += dt;
         let now = self.clock.now(self.dev.time_scale);
         self.game.tick(now);
@@ -444,9 +502,8 @@ impl App {
 
         if self.typing.is_some() {
             self.type_name();
-        } else if is_key_pressed(KeyCode::Escape) {
-            self.save();
-            self.clock.save();
+        } else if (is_key_pressed(KeyCode::Escape) || is_key_pressed(KeyCode::Back)) && !self.back()
+        {
             return false;
         }
         if self.asking_name {
@@ -465,7 +522,20 @@ impl App {
         );
         self.keys(now);
 
-        let gesture = self.input.poll();
+        let gesture = self.input.poll(dt);
+        // Under an overlay, swipes, the wheel and pinches reach nothing.
+        let gesture = if self.overlay_up() {
+            Gesture {
+                pinch: 1.0,
+                pointer: gesture.pointer,
+                tap: gesture.tap,
+                held: gesture.held,
+                released: gesture.released,
+                ..Default::default()
+            }
+        } else {
+            gesture
+        };
         let mut tap = gesture.tap;
         self.demo(dt, &mut tap);
 
@@ -484,6 +554,7 @@ impl App {
         };
 
         self.overlay_taps(&mut tap, &gesture, now);
+        self.keystone_menu_tap(&mut tap);
         self.cancel_tap(&mut tap);
         self.page_taps(&mut tap, now);
         self.bottom_bar_taps(&mut tap, panel, now);
@@ -536,14 +607,71 @@ impl App {
                 self.cam.fit(self.layout.min, self.layout.max);
             }
             self.biomes_open |= self.dev.shot_is(ShotKind::Biomes);
+            self.choosing |= self.dev.shot_is(ShotKind::Dial) && self.game.phase() == Phase::Shape;
+            if self.dev.shot_is(ShotKind::Detail) {
+                self.detail = Some(self.game.most_advanced());
+            }
         }
 
         self.draw(dt, now);
         self.export(capture)
     }
 
-    /// Dev keys (R resets the game, T ends the running cycle) and M for the map.
+    /// Something is up over the screen and takes the input: the end of the
+    /// Earth, the opening, an animal's page, the biome guide, the RAD panel,
+    /// the boon pick, an open dropdown or a name being asked.
+    fn overlay_up(&self) -> bool {
+        self.full_screen_overlay()
+            || self.rad_info
+            || self.keystones.menu.is_some()
+            || self.typing.is_some()
+            || self.asking_name
+    }
+
+    /// An overlay over the whole screen: the end of the Earth, the opening,
+    /// an animal's page, the biome guide or the boon pick.
+    fn full_screen_overlay(&self) -> bool {
+        self.collapse.is_some()
+            || self.opening.is_some()
+            || self.detail.is_some()
+            || self.biomes_open
+            || self.game.phase() == Phase::Boon
+    }
+
+    /// Escape, or Android's Back: closes what is on top. With nothing open
+    /// it leaves the game (on the desktop) or sends it to the background
+    /// (on Android); the web page stays. Returns false to quit.
+    fn back(&mut self) -> bool {
+        if self.collapse.is_some() || self.opening.is_some() || self.game.phase() == Phase::Boon {
+            // These play out, or need a pick: Back does nothing.
+        } else if self.rad_info {
+            self.rad_info = false;
+        } else if self.detail.is_some() {
+            self.detail = None;
+        } else if self.biomes_open {
+            self.biomes_open = false;
+        } else if self.keystones.menu.is_some() {
+            self.keystones.menu = None;
+        } else if self.mode.is_page() {
+            self.mode = self.page_from;
+        } else if self.choosing {
+            self.choosing = false;
+        } else if self.mode != Mode::Spiral {
+            self.mode = Mode::Spiral;
+        } else {
+            self.save();
+            self.clock.save();
+            return leave();
+        }
+        true
+    }
+
+    /// Dev keys (R resets the game, T ends the running cycle) and M for the
+    /// map; none while a name is being typed.
     fn keys(&mut self, now: f64) {
+        if self.typing.is_some() {
+            return;
+        }
         if self.dev.keys && is_key_pressed(KeyCode::R) {
             self.game = Game::new(now);
             self.reset_views();
@@ -585,12 +713,13 @@ impl App {
         if self.demo_left > 0 && self.demo_timer <= 0.0 {
             self.demo_timer = 0.5;
             self.demo_left -= 1;
-            *tap = Some(vec2(screen_width() * 0.5, screen_height() * 0.5));
+            *tap = Some(vec2(view::width() * 0.5, screen_height() * 0.5));
         }
     }
 
     /// Overlays eat taps first: the end of the Earth, the RAD panel, the
-    /// opening, the biome guide, an animal's page, the boon pick.
+    /// opening, the biome guide, an animal's page, the boon pick; then the
+    /// RAD badge, when none of them is up.
     fn overlay_taps(&mut self, tap: &mut Option<Vec2>, gesture: &Gesture, now: f64) {
         if let Some(c) = &mut self.collapse {
             if tap.take().is_some() {
@@ -600,17 +729,12 @@ impl App {
             if tap.take().is_some() {
                 self.rad_info = false;
             }
-        } else if tap.is_some_and(|p| {
-            matches!(self.mode, Mode::Spiral | Mode::Map | Mode::Keystones)
-                && ui::rad_badge_rect(&self.game).is_some_and(|b| b.contains(p))
-        }) {
-            self.rad_info = true;
-            *tap = None;
         } else if let Some(op) = &mut self.opening {
             if tap.take().is_some() {
                 let results = op.wants_results().then(|| self.game.open_genome(now));
                 let discovered = results.as_ref().and_then(|r| deepest(&self.game, r));
-                op.tap(results);
+                let meters = results.as_ref().map(|r| opening::meters(&mut self.game, r));
+                op.tap(results.zip(meters));
                 if let Some(new) = discovered {
                     self.layout = map_layout(&self.game);
                     self.nav.go_to(&self.game, new);
@@ -629,13 +753,34 @@ impl App {
                 self.detail = None;
             }
         } else if self.game.phase() == Phase::Boon {
-            self.boon_hover = (0..3).find(|&i| ui::boon_rect(i).contains(gesture.pointer));
+            self.boon_hover = ui::boon_at(&self.game, gesture.pointer);
             if let Some(p) = tap.take() {
-                if let Some(i) = (0..3).find(|&i| ui::boon_rect(i).contains(p)) {
+                if let Some(i) = ui::boon_at(&self.game, p) {
                     self.game.choose_boon(i);
                     self.save();
                 }
             }
+        } else if tap.is_some_and(|p| {
+            matches!(self.mode, Mode::Spiral | Mode::Map | Mode::Keystones)
+                && self.keystones.menu.is_none()
+                && ui::rad_badge_rect(&self.game).is_some_and(|b| b.contains(p))
+        }) {
+            self.rad_info = true;
+            *tap = None;
+        }
+    }
+
+    /// An open dropdown takes the tap before the bottom bar: a pick, or
+    /// anywhere else to close it.
+    fn keystone_menu_tap(&mut self, tap: &mut Option<Vec2>) {
+        let view = &mut self.keystones;
+        let (Some(menu), Some(p)) = (view.menu, *tap) else {
+            return;
+        };
+        *tap = None;
+        match ui::keystone_menu_item_at(&self.game, view, p) {
+            Some(i) => ui::choose_keystone_menu(view, menu, i),
+            None => view.menu = None,
         }
     }
 
@@ -748,6 +893,19 @@ impl App {
         {
             if self.settings.step_brightness(plus) && self.dev.persist {
                 self.settings.save();
+            }
+        } else if let Some(lang) = [Language::English, Language::French]
+            .into_iter()
+            .find(|&l| ui::language_button_rect(l).contains(p))
+        {
+            if lang != self.settings.language {
+                self.settings.language = lang;
+                names::set(lang);
+                // The map's boxes are sized to the names.
+                self.layout = map_layout(&self.game);
+                if self.dev.persist {
+                    self.settings.save();
+                }
             }
         }
     }
@@ -876,14 +1034,25 @@ impl App {
                 spiral::coil_radius(),
                 dt,
             );
+        } else if gesture.held {
+            // Still, or over the panel: the swipe loses its speed.
+            self.nav.hold(dt);
         }
         if gesture.released {
-            self.nav.release();
+            // Let go over the panel: no fling from a swipe that left the coil.
+            if panel.contains(gesture.pointer) {
+                self.nav.snap();
+            } else {
+                self.nav.release();
+            }
         }
-        if self.choosing && (gesture.wheel != 0.0 || gesture.wheel_x != 0.0) {
+        if self.choosing {
+            // Both wheels at once may cancel out: then no step.
             let notches = gesture.wheel_x + gesture.wheel;
-            self.game
-                .set_wait(self.game.wait_hours + notches.signum() * wait::STEP_HOURS);
+            if notches != 0.0 {
+                self.game
+                    .set_wait(self.game.wait_hours + notches.signum() * wait::STEP_HOURS);
+            }
         } else if gesture.wheel != 0.0 {
             self.nav.step(-gesture.wheel);
         }
@@ -928,8 +1097,12 @@ impl App {
         if gesture.pinch != 1.0 {
             self.cam.zoom_at(gesture.pinch_anchor, gesture.pinch);
         }
-        if gesture.wheel != 0.0 {
-            let f = if gesture.wheel > 0.0 { 1.1 } else { 1.0 / 1.1 };
+        if gesture.zoom_wheel != 0.0 {
+            let f = if gesture.zoom_wheel > 0.0 {
+                1.1
+            } else {
+                1.0 / 1.1
+            };
             self.cam.zoom_at(gesture.pinch_anchor, f);
         }
         if gesture.drag != Vec2::ZERO {
@@ -952,15 +1125,8 @@ impl App {
             view.scroll =
                 (view.scroll - gesture.drag.y).clamp(0.0, ui::keystones_max_scroll(game, view));
         }
+        // An open dropdown already took the tap (`keystone_menu_tap`).
         let Some(p) = tap else { return };
-        // An open dropdown takes the tap: a pick, or anywhere else to close it.
-        if let Some(menu) = view.menu {
-            match ui::keystone_menu_item_at(game, view, p) {
-                Some(i) => ui::choose_keystone_menu(view, menu, i),
-                None => view.menu = None,
-            }
-            return;
-        }
         if let Some(menu) = [Menu::Sort, Menu::Filter]
             .into_iter()
             .find(|&m| ui::keystone_menu_button_rect(game, m).contains(p))
@@ -1014,18 +1180,23 @@ impl App {
 
     fn draw(&mut self, dt: f32, now: f64) {
         let game = &self.game;
-        let t = get_time() as f32;
+        let t = get_time();
+        // The planet fills the whole screen, the rest sits in the column
+        // (the other screens clear it all).
+        if self.mode == Mode::Spiral {
+            let shown = game.cycle.map_or(game.planet, |c| c.launched);
+            let shown = self.collapse.as_ref().map_or(shown, |c| c.planet(shown));
+            let speed = if game.phase() == Phase::Running {
+                2.5
+            } else {
+                1.0
+            };
+            self.world_t += f64::from(dt * speed);
+            self.backdrop.draw(&shown, self.world_t, t, dt);
+        }
+        view::begin_column();
         match self.mode {
             Mode::Spiral => {
-                let shown = game.cycle.map_or(game.planet, |c| c.launched);
-                let shown = self.collapse.as_ref().map_or(shown, |c| c.planet(shown));
-                let speed = if game.phase() == Phase::Running {
-                    2.5
-                } else {
-                    1.0
-                };
-                self.world_t += dt * speed;
-                self.backdrop.draw(&shown, self.world_t, t, dt);
                 if !self.dev.shot_is(ShotKind::Backdrop) {
                     if self.choosing {
                         dial::draw(game.wait_hours, &self.sprites, &self.assets);
@@ -1084,6 +1255,15 @@ impl App {
         }
         if let Some(c) = &mut self.collapse {
             c.draw(game.rad, game.fossils());
+        }
+        view::end_column();
+        // A full-screen overlay dims the planet beside the column too.
+        let dim = self.full_screen_overlay();
+        let side = view::left();
+        if dim && side > 0.0 {
+            let (col, h) = (render::faded(render::BG, 0.85), screen_height());
+            draw_rectangle(0.0, 0.0, side, h, col);
+            draw_rectangle(side + view::width(), 0.0, screen_width(), h, col);
         }
         self.brightness.apply(self.settings.brightness);
     }

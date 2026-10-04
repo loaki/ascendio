@@ -46,15 +46,24 @@ struct Layer {
 
 pub struct Collapse {
     t: f32,
+    /// The chance the genome's wait had of ending the Earth, for the roll.
+    risk: f32,
     reset_done: bool,
     done: bool,
     layer: Option<Layer>,
 }
 
 impl Collapse {
+    /// The odds of a 4h wait; `with_risk` shows the wait's own.
     pub fn new() -> Self {
+        Self::with_risk(game::DOOM_CHANCE)
+    }
+
+    /// `risk`: the doomed genome's `Game::doom_risk`.
+    pub fn with_risk(risk: f32) -> Self {
         Self {
             t: 0.0,
+            risk,
             reset_done: false,
             done: false,
             layer: None,
@@ -145,7 +154,7 @@ impl Collapse {
 
     /// Over everything else. `rad` and `fossils` are the new Earth's.
     pub fn draw(&mut self, rad: u32, fossils: usize) {
-        let (sw, sh, u) = (screen_width(), screen_height(), render::u());
+        let (sw, sh, u) = (crate::view::width(), screen_height(), render::u());
         // Stepped time: the motion moves in 12 fps frames.
         let t = (self.t * FPS * PACE).floor() / (FPS * PACE);
         let jolt = |k: i32| {
@@ -168,7 +177,7 @@ impl Collapse {
             }
             if t >= 0.15 {
                 let p = vec2(sw * 0.5, mid) + jolt(1);
-                text_centered("1 IN 5", p.x, p.y, u * 22.0, LOCK_RED);
+                text_centered(&odds_label(self.risk), p.x, p.y, u * 22.0, LOCK_RED);
             }
         } else if t < FLASH {
             // The flash: solid white, then dithering away to the frozen Earth.
@@ -241,7 +250,7 @@ impl Collapse {
 
 /// NEW EARTH, the radiation it brings, and what waits to be found again.
 fn draw_banner(age: f32, rad: u32, fossils: usize, ready: bool) {
-    let (sw, sh, u) = (screen_width(), screen_height(), render::u());
+    let (sw, sh, u) = (crate::view::width(), screen_height(), render::u());
     let pop = match (age * FPS * PACE) as i32 {
         0 => 0.6,
         1 => 0.85,
@@ -286,5 +295,29 @@ fn draw_banner(age: f32, rad: u32, fossils: usize, ready: bool) {
             u * 6.5,
             faded(TEXT, 0.6 + 0.4 * (get_time() as f32 * 3.0).sin()),
         );
+    }
+}
+
+/// The roll's odds, "1 IN 5": about 1 in 9 for a 2h wait, 1 in 4 for 6h.
+fn odds_label(risk: f32) -> String {
+    let n = if risk > 0.0 {
+        (1.0 / risk).round().max(1.0)
+    } else {
+        5.0
+    };
+    format!("1 IN {n:.0}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::wait;
+
+    #[test]
+    fn the_roll_shows_the_waits_own_odds() {
+        let risk = |h: f32| 1.0 - (1.0 - game::DOOM_CHANCE).powf(h / wait::DEFAULT_HOURS);
+        assert_eq!(odds_label(risk(2.0)), "1 IN 9");
+        assert_eq!(odds_label(risk(4.0)), "1 IN 5");
+        assert_eq!(odds_label(risk(6.0)), "1 IN 4");
     }
 }

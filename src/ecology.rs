@@ -178,7 +178,7 @@ pub enum Rule {
     /// x3, but asleep after a cycle (a duplicate wakes it).
     Fragile,
     /// A charge per 40 Ma waited on a planet changed since the wait before
-    /// (half the bonus each); a wait on the same planet empties them.
+    /// (+20% of the bonus each); a wait on the same planet empties them.
     Changing,
     /// The opposite: charges while the planet stays exactly the same.
     Stasis,
@@ -208,7 +208,7 @@ impl Rule {
         match self {
             Rule::Fragile => Some("Falls asleep after one cycle"),
             Rule::Changing => Some("Morphs are halved"),
-            Rule::Stasis => Some("15% fewer new species"),
+            Rule::Stasis => Some("15 points less chance of a new species"),
             Rule::Catch(c) => Some(c.drawback()),
             _ => None,
         }

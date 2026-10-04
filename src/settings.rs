@@ -2,6 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::names::Language;
+
 /// Screen brightness, in percent: below 100 dims, above brightens.
 pub const BRIGHTNESS_MIN: u8 = 50;
 pub const BRIGHTNESS_MAX: u8 = 150;
@@ -21,10 +23,22 @@ pub struct Settings {
     /// The name on the leaderboard: random until the player picks one.
     #[serde(default)]
     pub name: String,
+    /// The language of the animals' names.
+    #[serde(default)]
+    pub language: Language,
 }
 
 fn default_brightness() -> u8 {
     100
+}
+
+/// `"field":"value"` in text that isn't JSON any more; `None` if absent or
+/// cut off (the caller checks the value: a broken one is remade).
+fn find_string(text: &str, field: &str) -> Option<String> {
+    let after = &text[text.find(&format!("\"{field}\""))? + field.len() + 2..];
+    let after = after.trim_start().strip_prefix(':')?.trim_start();
+    let value = after.strip_prefix('"')?;
+    Some(value[..value.find('"')?].to_string())
 }
 
 impl Default for Settings {
@@ -34,23 +48,73 @@ impl Default for Settings {
             brightness: default_brightness(),
             player_id: String::new(),
             name: String::new(),
+            language: Language::default(),
         }
     }
 }
 
 impl Settings {
-    pub fn load() -> Self {
-        crate::save::read_settings().map_or_else(Self::default, |json| Self::from_json(&json))
+    /// `persist`: this run may save over them, so broken ones are kept aside.
+    pub fn load(persist: bool) -> Self {
+        let Some(json) = crate::save::read_settings() else {
+            return Self::default();
+        };
+        let (s, clean) = Self::parse(&json);
+        if !clean && persist {
+            crate::save::keep_bad_settings(&json);
+        }
+        s
     }
 
     /// Settings as any build wrote them; what an older one didn't know
-    /// takes its default, and anything unreadable starts over.
+    /// takes its default.
+    #[cfg(test)]
     fn from_json(json: &str) -> Self {
-        let mut s: Self = serde_json::from_str(json).unwrap_or_default();
+        Self::parse(json).0
+    }
+
+    /// Also says whether `json` read cleanly. If not, whatever fields still
+    /// make sense are kept, one by one: above all the leaderboard identity,
+    /// which can't be made again.
+    fn parse(json: &str) -> (Self, bool) {
+        let (mut s, clean) = match serde_json::from_str(json) {
+            Ok(s) => (s, true),
+            Err(_) => (Self::salvage(json), json.trim().is_empty()),
+        };
         // Snapped to a level, should the levels ever change.
         let b = s.brightness.clamp(BRIGHTNESS_MIN, BRIGHTNESS_MAX) - BRIGHTNESS_MIN;
         s.brightness =
             BRIGHTNESS_MIN + (b + BRIGHTNESS_STEP / 2) / BRIGHTNESS_STEP * BRIGHTNESS_STEP;
+        (s, clean)
+    }
+
+    /// Each field that reads, from settings that don't as a whole (a wrong
+    /// type, or a cut-off file: then the identity is looked for as text).
+    fn salvage(json: &str) -> Self {
+        let mut s = Self::default();
+        let Ok(serde_json::Value::Object(map)) = serde_json::from_str(json) else {
+            s.player_id = find_string(json, "player_id").unwrap_or_default();
+            s.name = find_string(json, "name").unwrap_or_default();
+            return s;
+        };
+        if let Some(b) = map.get("notify").and_then(|v| v.as_bool()) {
+            s.notify = b;
+        }
+        if let Some(b) = map.get("brightness").and_then(|v| v.as_f64()) {
+            s.brightness = b.clamp(0.0, 255.0) as u8;
+        }
+        if let Some(id) = map.get("player_id").and_then(|v| v.as_str()) {
+            s.player_id = id.to_string();
+        }
+        if let Some(name) = map.get("name").and_then(|v| v.as_str()) {
+            s.name = name.to_string();
+        }
+        if let Some(lang) = map
+            .get("language")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+        {
+            s.language = lang;
+        }
         s
     }
 
@@ -134,6 +198,34 @@ mod tests {
         assert!(!again.ensure_player(99), "nothing to make the second time");
         assert_eq!(again.player_id, s.player_id);
         assert_eq!(again.name, s.name);
+    }
+
+    #[test]
+    fn broken_settings_keep_the_player() {
+        let id = "0123456789abcdef0123456789abcdef";
+        // A field of the wrong type, then a file cut off mid-write.
+        for json in [
+            format!(
+                "{{\"notify\":\"yes\",\"brightness\":125,\"player_id\":\"{id}\",\"name\":\"Rex\"}}"
+            ),
+            format!("{{\"notify\":true,\"player_id\": \"{id}\",\"name\":\"Rex\",\"bri"),
+        ] {
+            let (mut s, clean) = Settings::parse(&json);
+            assert!(!clean, "{json}");
+            assert!(!s.ensure_player(1), "{json}: nothing to remake");
+            assert_eq!(s.player_id, id);
+            assert_eq!(s.name, "Rex");
+        }
+        assert_eq!(
+            Settings::parse("{\"brightness\":\"x\",\"notify\":true}")
+                .0
+                .brightness,
+            100
+        );
+        assert!(Settings::parse("").1, "nothing stored is nothing broken");
+        assert!(Settings::from_json("{\"player_id\":\"ab")
+            .player_id
+            .is_empty());
     }
 
     #[test]

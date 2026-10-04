@@ -151,7 +151,7 @@ Sea Anemone, Hydra, Ribbon Worm, Lamp Shell, Chiton, Sea Slug, Leech, Velvet Wor
 | Dickinsonia | *Dickinsonia* | Urmetazoan | 558 | Bobrovskiy et al. 2018, Science — [10.1126/science.aat7228](https://doi.org/10.1126/science.aat7228) |
 | Dimetrodon | *Dimetrodon* | Synapsid | 295 | Brink & Reisz 2014, Nat. Commun. — [10.1038/ncomms4269](https://doi.org/10.1038/ncomms4269) |
 | Lucy | *Australopithecus* | Hominin | 3.9 | Johanson & White 1979, Science — [10.1126/science.104384](https://doi.org/10.1126/science.104384) |
-| Neanderthal | *Homo neanderthalensis* | Hominin | 0.43 | Meyer et al. 2016, Nature — [10.1038/nature17405](https://doi.org/10.1038/nature17405) |
+| Neanderthal | *Homo neanderthalensis* | Hominin | 0.4 | Meyer et al. 2016, Nature — [10.1038/nature17405](https://doi.org/10.1038/nature17405) |
 | Pakicetus | *Pakicetus* | Whale | 50 | Thewissen et al. 2001, Nature — [10.1038/35095005](https://doi.org/10.1038/35095005) |
 | Acanthostega | *Acanthostega* | Tetrapod | 365 | Coates & Clack 1990, Nature — [10.1038/347066a0](https://doi.org/10.1038/347066a0) |
 

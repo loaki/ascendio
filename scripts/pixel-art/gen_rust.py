@@ -25,7 +25,7 @@ def main():
     check()
     rendered = {name: render(name, rows, pal) for name, (rows, pal) in sorted(A.items())}
     colours = sorted({c for px, _ in rendered.values() for row in px for c in row if c})
-    assert len(colours) < len(CODES), f"{len(colours)} colours, only {len(CODES)} codes"
+    assert len(colours) <= len(CODES), f"{len(colours)} colours, only {len(CODES)} codes"
     code = {c: CODES[i] for i, c in enumerate(colours)}
     eye = (16, 20, 32)
 

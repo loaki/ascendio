@@ -5,7 +5,10 @@
 //! to the uptime clock (`SystemClock.elapsedRealtime`), which a change of
 //! the phone's time doesn't move: between two restarts, time only advances
 //! as the uptime does. After a restart it trusts the phone's clock once and
-//! anchors again. Everywhere, time never goes backwards.
+//! anchors again, never earlier than the latest time handed out. Elsewhere
+//! the device clock is all there is: it is followed both ways, since winding
+//! it back gains a player nothing, and refusing to would freeze every wait
+//! after a clock that ran ahead is put right.
 
 use serde::{Deserialize, Serialize};
 
@@ -44,12 +47,26 @@ impl Anchor {
                 };
                 t
             }
-            None => wall,
+            // Nothing to anchor: the anchor stays as it is, so it is never
+            // rewritten for nothing.
+            None => return wall,
         };
         self.last = self.last.max(t);
         self.last
     }
+
+    /// Whether this anchor is worth writing over `saved`. A new anchor is;
+    /// `last` moves every frame, so it is only written once it has moved
+    /// by `LAST_EVERY` (it only matters after a restart, by then off by
+    /// that much at most).
+    fn differs(&self, saved: &Anchor) -> bool {
+        (self.wall, self.uptime, self.boot) != (saved.wall, saved.uptime, saved.boot)
+            || (self.last - saved.last).abs() >= LAST_EVERY
+    }
 }
+
+/// Seconds `Anchor::last` may move before it is saved again.
+const LAST_EVERY: f64 = 60.0;
 
 /// The trusted clock, kept with the settings so it survives starting over.
 pub struct Clock {
@@ -86,7 +103,7 @@ impl Clock {
     }
 
     pub fn save(&mut self) {
-        if self.persist && self.anchor != self.saved {
+        if self.persist && self.anchor.differs(&self.saved) {
             crate::save::write_clock(&serde_json::to_string(&self.anchor).unwrap_or_default());
             self.saved = self.anchor;
         }
@@ -97,36 +114,74 @@ impl Clock {
 mod device {
     //! Through the activity, like `notify.rs` (`android/main_activity_inject.java`).
 
-    use macroquad::miniquad::call_method;
-    use macroquad::miniquad::native::android::{attach_jni_env, ndk_sys, ACTIVITY};
+    use std::os::raw::{c_int, c_long};
+    use std::sync::{Mutex, OnceLock};
+    use std::time::Instant;
 
-    unsafe fn clear(env: *mut ndk_sys::JNIEnv) {
-        if (**env).ExceptionCheck.unwrap()(env) != 0 {
-            (**env).ExceptionClear.unwrap()(env);
-        }
-    }
+    use macroquad::miniquad::call_method;
+    use macroquad::miniquad::native::android::ACTIVITY;
+
+    use crate::notify::{clear, with_jni};
 
     /// Seconds since the phone started, and how many times it has started.
     pub fn uptime_and_boot() -> Option<(f64, i64)> {
-        static BOOT: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
-        unsafe {
-            let env = attach_jni_env();
-            let ms = call_method!(CallLongMethod, env, ACTIVITY, "uptimeMs", "()J");
-            clear(env);
-            // It can't change while the game runs: asked once.
-            let boot = *BOOT.get_or_init(|| {
+        static BOOT: OnceLock<i64> = OnceLock::new();
+        // It can't change while the game runs: asked once.
+        let boot = *BOOT.get_or_init(|| unsafe {
+            with_jni(|env| {
                 let b = call_method!(CallIntMethod, env, ACTIVITY, "bootCount", "()I");
                 clear(env);
                 i64::from(b)
-            });
-            (boot >= 0).then_some((ms as f64 / 1000.0, boot))
+            })
+        });
+        (boot >= 0).then(|| (boottime().unwrap_or_else(asked_uptime), boot))
+    }
+
+    /// `SystemClock.elapsedRealtime` is this clock: read here directly, it
+    /// costs no JNI call each frame.
+    fn boottime() -> Option<f64> {
+        #[repr(C)]
+        struct Timespec {
+            sec: c_long,
+            nsec: c_long,
         }
+        extern "C" {
+            fn clock_gettime(clock: c_int, ts: *mut Timespec) -> c_int;
+        }
+        const CLOCK_BOOTTIME: c_int = 7;
+        let mut ts = Timespec { sec: 0, nsec: 0 };
+        let ok = unsafe { clock_gettime(CLOCK_BOOTTIME, &mut ts) } == 0;
+        ok.then(|| ts.sec as f64 + ts.nsec as f64 / 1e9)
+    }
+
+    /// The activity's `uptimeMs`, should the kernel's clock fail: asked at
+    /// most once a second, and carried forward by the monotonic clock in
+    /// between (not `get_time`, which follows the device clock).
+    fn asked_uptime() -> f64 {
+        static ASKED: Mutex<Option<(Instant, f64)>> = Mutex::new(None);
+        let mut asked = ASKED.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((at, uptime)) = *asked {
+            let since = at.elapsed().as_secs_f64();
+            if since < 1.0 {
+                return uptime + since;
+            }
+        }
+        let ms = unsafe {
+            with_jni(|env| {
+                let ms = call_method!(CallLongMethod, env, ACTIVITY, "uptimeMs", "()J");
+                clear(env);
+                ms
+            })
+        };
+        let uptime = ms as f64 / 1000.0;
+        *asked = Some((Instant::now(), uptime));
+        uptime
     }
 }
 
 #[cfg(not(target_os = "android"))]
 mod device {
-    /// No uptime to trust: the device clock alone, never going backwards.
+    /// No uptime to trust: the device clock alone.
     pub fn uptime_and_boot() -> Option<(f64, i64)> {
         None
     }
@@ -161,15 +216,33 @@ mod tests {
     }
 
     #[test]
-    fn time_never_goes_backwards() {
+    fn without_uptime_the_clock_is_followed_both_ways() {
         let mut a = Anchor::default();
         assert_eq!(a.now(5000.0, None), 5000.0);
-        assert_eq!(a.now(4000.0, None), 5000.0, "the clock wound back");
-        assert_eq!(a.now(5100.0, None), 5100.0);
-        // Nor across a restart with the clock wound back.
+        assert_eq!(a.now(4000.0, None), 4000.0, "a clock ahead, put right");
+        assert_eq!(a.now(4100.0, None), 4100.0, "and running on from there");
+    }
+
+    #[test]
+    fn a_restart_never_goes_backwards() {
         let mut b = Anchor::default();
         b.now(5000.0, Some((100.0, 1)));
         assert_eq!(b.now(10.0, Some((5.0, 2))), 5000.0);
+        assert_eq!(b.now(10.0, Some((6.0, 2))), 5001.0);
+    }
+
+    #[test]
+    fn a_moving_last_is_saved_now_and_then() {
+        let mut a = Anchor::default();
+        a.now(1000.0, Some((50.0, 7)));
+        let saved = a;
+        a.now(0.0, Some((60.0, 7)));
+        assert!(!a.differs(&saved), "ten seconds on");
+        a.now(0.0, Some((50.0 + LAST_EVERY, 7)));
+        assert!(a.differs(&saved), "a minute on");
+        let mut b = saved;
+        b.now(2000.0, Some((1.0, 8)));
+        assert!(b.differs(&saved), "a new anchor, at once");
     }
 
     #[test]

@@ -4,7 +4,7 @@
 
 use macroquad::prelude::*;
 
-use crate::pixel::{bayer, hash, mix, Canvas, Rgb, W};
+use crate::pixel::{bayer, hash, mix, phase, Canvas, Rgb, W};
 use crate::planet::Planet;
 
 /// Where the volcano rises, in backdrop pixels.
@@ -51,6 +51,8 @@ pub struct Backdrop {
     canvas: Canvas,
     ridges: [Vec<f32>; 3],
     shown: Option<Shown>,
+    /// Per pixel, the vignette's strength; it only depends on the canvas size.
+    vignette: Vec<f32>,
 }
 
 /// Linear interpolation through `t` at fractional index `v`.
@@ -97,12 +99,14 @@ impl Backdrop {
                 ridge(&[(2.0, 8.0, 4.0), (6.0, 5.0, 1.0), (19.0, 2.5, 3.0)]),
             ],
             shown: None,
+            vignette: Vec::new(),
         }
     }
 
     /// `t` drives ambient motion (faster while time runs); `calm` is real
-    /// time, so the volcano never looks frantic.
-    pub fn draw(&mut self, planet: &Planet, t: f32, calm: f32, dt: f32) {
+    /// time, so the volcano never looks frantic. Both are f64 so motion
+    /// stays smooth however long the game runs.
+    pub fn draw(&mut self, planet: &Planet, t: f64, calm: f64, dt: f32) {
         if !self.canvas.fits_screen() {
             *self = Self::new();
         }
@@ -179,7 +183,7 @@ impl Backdrop {
         }
     }
 
-    fn paint(&mut self, s: &Shown, t: f32, calm: f32) {
+    fn paint(&mut self, s: &Shown, t: f64, calm: f64) {
         let scene = self.scene(s);
         self.paint_ground(s, &scene, t);
         self.paint_surface(s, &scene, t);
@@ -244,7 +248,7 @@ impl Backdrop {
     }
 
     /// Rock, ridges and vegetation above the water, the sea and its light below.
-    fn paint_ground(&mut self, s: &Shown, scene: &Scene, t: f32) {
+    fn paint_ground(&mut self, s: &Shown, scene: &Scene, t: f64) {
         let Scene {
             h,
             sc,
@@ -260,6 +264,7 @@ impl Backdrop {
         let sky = sky_palette(s);
         let wat = water_palette(s);
         let on_volcano = |x: i32| vol > 0.3 && (x - vx).abs() < vw;
+        let ray_ph = phase(t, 0.4);
         for y in 0..h {
             for x in 0..W as i32 {
                 let b = bayer(x, y);
@@ -319,7 +324,7 @@ impl Backdrop {
                     let f = (y - wy) as f32 / (h - wy).max(1) as f32;
                     let mut c = wat[((f * 4.6 + b * 0.8) as usize).min(4)];
                     let u = x as f32 + (y - wy) as f32 * 0.5;
-                    let ray = (0.5 + 0.5 * (u * 0.08 + t * 0.4).sin()).powi(8)
+                    let ray = (0.5 + 0.5 * (u * 0.08 + ray_ph).sin()).powi(8)
                         * (1.0 - f)
                         * (0.3 + s.oxygen * 0.15);
                     if ray > b {
@@ -333,15 +338,17 @@ impl Backdrop {
     }
 
     /// The water surface, where it isn't land; ice when frozen.
-    fn paint_surface(&mut self, s: &Shown, scene: &Scene, t: f32) {
+    fn paint_surface(&mut self, s: &Shown, scene: &Scene, t: f64) {
         let Scene { h, wy, .. } = *scene;
         let tops = &scene.tops;
         if wy > 0 && wy < h {
+            let wave_ph = phase(t, 2.0);
+            let glint = (t * 3.0) as i64 as i32;
             for x in 0..W as i32 {
                 if tops[x as usize].iter().any(|&tp| tp <= wy) {
                     continue;
                 }
-                let w = ((x as f32 * 0.25 + t * 2.0).sin() * 0.8).round() as i32;
+                let w = ((x as f32 * 0.25 + wave_ph).sin() * 0.8).round() as i32;
                 self.canvas.put(
                     x,
                     wy + w,
@@ -351,7 +358,7 @@ impl Backdrop {
                         [191, 232, 240]
                     },
                 );
-                if hash(x, (t * 3.0) as i32) > 0.93 {
+                if hash(x, glint) > 0.93 {
                     self.canvas.put(x, wy + w - 1, [255, 255, 255]);
                     self.canvas.put(x + 1, wy + w - 1, [255, 255, 255]);
                 }
@@ -407,12 +414,14 @@ impl Backdrop {
     }
 
     /// Crater glow and smoke; lava and bombs when violent; bubbles if submerged.
-    fn paint_volcano(&mut self, scene: &Scene, calm: f32) {
+    fn paint_volcano(&mut self, scene: &Scene, calm: f64) {
         let Scene { sc, wy, vol, .. } = *scene;
         let tops = &scene.tops;
         let vx = VOLCANO_X;
         if vol > 0.3 {
             let cy = tops[vx as usize][0];
+            // A fraction of one cycle of `calm * rate`, offset by `off`.
+            let cycle = |rate: f64, off: f32| ((calm * rate + off as f64) % 1.0) as f32;
             if cy < wy {
                 let heat = (vol - 0.3).min(1.7);
                 self.glow(
@@ -420,10 +429,10 @@ impl Backdrop {
                     cy as f32,
                     10.0 + heat * 6.0,
                     [255, 106, 40],
-                    0.3 + heat * 0.25 + 0.08 * (calm * 0.9).sin(),
+                    0.3 + heat * 0.25 + 0.08 * phase(calm, 0.9).sin(),
                 );
                 for dx in -3..=3 {
-                    let f = 0.5 + 0.5 * (dx as f32 * 1.3 + calm * 0.8).sin();
+                    let f = 0.5 + 0.5 * (dx as f32 * 1.3 + phase(calm, 0.8)).sin();
                     self.canvas
                         .put(vx + dx, cy + 1, mix([255, 110, 40], [255, 176, 72], f));
                 }
@@ -441,15 +450,15 @@ impl Backdrop {
                             if y >= wy {
                                 break;
                             }
-                            let f =
-                                0.5 + 0.5 * (step as f32 * 0.45 - calm * 1.1 + side as f32).sin();
+                            let f = 0.5
+                                + 0.5 * (step as f32 * 0.45 - phase(calm, 1.1) + side as f32).sin();
                             self.canvas
                                 .put(x, y, mix([200, 62, 28], [255, 156, 64], f * f));
                             self.canvas.put(x, y + 1, [150, 40, 24]);
                         }
                     }
                     for i in 0..4 {
-                        let age = (calm * (0.22 + hash(i, 5) * 0.08) + hash(i, 9)) % 1.0;
+                        let age = cycle(0.22 + hash(i, 5) as f64 * 0.08, hash(i, 9));
                         let x = vx as f32 + (hash(i, 3) - 0.5) * 50.0 * sc * age;
                         let y = cy as f32 - (70.0 * age - 80.0 * age * age) * sc;
                         if (y as i32) < wy {
@@ -461,9 +470,9 @@ impl Backdrop {
                 let puffs = 18 + (heat * 10.0) as i32;
                 let dark = (vol - 1.0).clamp(0.0, 1.0);
                 for i in 0..puffs {
-                    let age = (calm * 0.035 * (1.0 + vol * 0.3) + i as f32 / puffs as f32) % 1.0;
+                    let age = cycle(0.035 * (1.0 + vol as f64 * 0.3), i as f32 / puffs as f32);
                     let px = vx as f32 - age.powf(1.5) * 58.0 * sc
-                        + (i as f32 * 1.7 + calm * 0.25).sin() * 5.0 * age;
+                        + (i as f32 * 1.7 + phase(calm, 0.25)).sin() * 5.0 * age;
                     let py = cy as f32 - 3.0 - age * 105.0 * sc;
                     let r = (3.0 + age * 17.0) * sc * (0.7 + 0.3 * vol);
                     let density = (1.0 - age).powf(0.7) * (0.6 + 0.3 * vol.min(1.0));
@@ -473,8 +482,8 @@ impl Backdrop {
                 }
             } else {
                 for i in 0..8 {
-                    let age = (calm * 0.2 + i as f32 / 8.0) % 1.0;
-                    let x = vx as f32 + (i as f32 * 2.1 + calm * 0.8).sin() * 3.0;
+                    let age = cycle(0.2, i as f32 / 8.0);
+                    let x = vx as f32 + (i as f32 * 2.1 + phase(calm, 0.8)).sin() * 3.0;
                     let y = cy as f32 - age * (cy - wy) as f32;
                     self.canvas.put(x as i32, y as i32, [191, 232, 240]);
                 }
@@ -484,7 +493,7 @@ impl Backdrop {
     }
 
     /// The sun and the clouds, while the sky shows.
-    fn paint_sky(&mut self, s: &Shown, scene: &Scene, t: f32) {
+    fn paint_sky(&mut self, s: &Shown, scene: &Scene, t: f64) {
         let Scene { sc, wy, cold, .. } = *scene;
         if wy > (30.0 * sc) as i32 {
             let sy = ((wy as f32 - 30.0 * sc).min(40.0 * sc)) as i32;
@@ -509,7 +518,7 @@ impl Backdrop {
                 }
             }
             for k in 0..3 {
-                let cx = ((k as f32 * 70.0 + t * 4.0) % 220.0) as i32 - 20;
+                let cx = ((k as f64 * 70.0 + t * 4.0) % 220.0) as i32 - 20;
                 let cy = ((14 + k * 11) as f32 * sc) as i32;
                 if cy > wy - 10 {
                     continue;
@@ -534,12 +543,13 @@ impl Backdrop {
     }
 
     /// Kelp swaying on the deep ridge.
-    fn paint_kelp(&mut self, s: &Shown, scene: &Scene, t: f32) {
+    fn paint_kelp(&mut self, s: &Shown, scene: &Scene, t: f64) {
         let Scene {
             sc, wy, veg_level, ..
         } = *scene;
         let tops = &scene.tops;
         if s.temp >= 0.5 {
+            let sway_ph = phase(t, 1.2);
             for k in 0..(10 + veg_level * 2) {
                 let x0 = hash(k as i32, 51) * W as f32;
                 let sb = tops[(x0 as usize).min(W - 1)][2];
@@ -550,7 +560,7 @@ impl Backdrop {
                 let mut sy = 0;
                 while sy < hgt {
                     let sway =
-                        (t * 1.2 + k as f32 + sy as f32 * 0.05).sin() * 3.0 * sy as f32 / 40.0;
+                        (sway_ph + k as f32 + sy as f32 * 0.05).sin() * 3.0 * sy as f32 / 40.0;
                     self.canvas.put((x0 + sway) as i32, sb - sy, [10, 48, 40]);
                     self.canvas
                         .put((x0 + sway) as i32 + 1, sb - sy, [10, 48, 40]);
@@ -561,12 +571,12 @@ impl Backdrop {
     }
 
     /// Marine snow, brighter with more oxygen.
-    fn paint_marine_snow(&mut self, s: &Shown, scene: &Scene, t: f32) {
+    fn paint_marine_snow(&mut self, s: &Shown, scene: &Scene, t: f64) {
         let Scene { h, wy, .. } = *scene;
         for k in 0..60 {
             let x = hash(k, 7) * W as f32;
-            let speed = 3.0 + hash(k, 9) * 6.0;
-            let y = ((hash(k, 8) * h as f32 + t * speed) % h as f32) as i32;
+            let speed = 3.0 + hash(k, 9) as f64 * 6.0;
+            let y = ((hash(k, 8) as f64 * h as f64 + t * speed) % h as f64) as i32;
             if y > wy {
                 let c = if s.oxygen >= 3.5 && k % 3 == 0 {
                     [197, 247, 106]
@@ -581,12 +591,21 @@ impl Backdrop {
     /// Vignette, so the UI reads on top.
     fn paint_vignette(&mut self, scene: &Scene) {
         let Scene { h, .. } = *scene;
+        if self.vignette.len() != W * h as usize {
+            self.vignette = (0..h)
+                .flat_map(|y| {
+                    (0..W as i32).map(move |x| {
+                        let rx = (x as f32 - W as f32 * 0.5) / (W as f32 * 0.62);
+                        let ry = (y as f32 - h as f32 * 0.5) / (h as f32 * 0.6);
+                        let r = (rx * rx + ry * ry).sqrt();
+                        ((r - 0.6) / 0.5).clamp(0.0, 1.0).powf(1.3) * 0.85
+                    })
+                })
+                .collect();
+        }
         for y in 0..h {
             for x in 0..W as i32 {
-                let rx = (x as f32 - W as f32 * 0.5) / (W as f32 * 0.62);
-                let ry = (y as f32 - h as f32 * 0.5) / (h as f32 * 0.6);
-                let r = (rx * rx + ry * ry).sqrt();
-                let v = ((r - 0.6) / 0.5).clamp(0.0, 1.0).powf(1.3) * 0.85;
+                let v = self.vignette[y as usize * W + x as usize];
                 if bayer(x, y) < v {
                     self.canvas.put(x, y, [3, 5, 10]);
                 }

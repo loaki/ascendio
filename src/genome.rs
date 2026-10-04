@@ -1,6 +1,8 @@
 //! Rolling a new genome: which animals it can hold, card tiers, morphs
 //! and the specimen fallback. Pure logic over a seedable `Rng`.
 
+use std::borrow::Cow;
+
 use serde::{Deserialize, Serialize};
 
 use crate::ecology::Tier;
@@ -331,6 +333,18 @@ fn owned_pool(phy: &Phylogeny, found: &[bool], planet: &Planet) -> Vec<usize> {
     }
 }
 
+/// The animals of `pool` at least `floor` rare: the whole pool, as is, when
+/// there is no floor.
+fn reaching<'a>(phy: &Phylogeny, pool: &'a [usize], floor: Tier) -> Cow<'a, [usize]> {
+    if floor == Tier::Common {
+        return Cow::Borrowed(pool);
+    }
+    pool.iter()
+        .copied()
+        .filter(|&i| phy.taxa[i].eco.tier >= floor)
+        .collect()
+}
+
 /// Rolls one genome against the collection before opening. Each card rolls
 /// a rarity, then whether it's a new species (`Odds::discovery`) or one
 /// already owned, which levels it up. Cards come back best last (reveal
@@ -355,32 +369,44 @@ pub fn roll(
             .map(|c: &Card| c.tier)
             .max()
             .unwrap_or(Tier::Common);
-        // The last card makes good a sure Rare (a 6h wait, Catalyst) or a
-        // sure Epic (Catalyst on a 6h wait) the others didn't bring.
-        let mut floor = Tier::Common;
-        if last {
-            if odds.catalyst && best < Tier::Rare {
-                floor = floor.max(Tier::Rare);
-            }
-            if odds.sure_epic && best < Tier::Epic {
-                floor = floor.max(Tier::Epic);
-            }
-        }
         let fresh = eligible(phy, &seen, planet);
-        // Only lift the roll if something that rare can drop, new or owned.
         let can_drop = |t: Tier| {
             fresh
                 .iter()
                 .chain(&owned)
                 .any(|&i| phy.taxa[i].eco.tier >= t)
         };
-        if tier < floor && can_drop(floor) {
-            tier = floor;
+        // The last card makes good a sure Rare (a 6h wait, Catalyst) or a
+        // sure Epic (Catalyst on a 6h wait) the others didn't bring, as far
+        // as something that rare can drop, new or owned: an Epic out of
+        // reach still keeps the Rare.
+        let mut floor = Tier::Common;
+        if last {
+            if odds.sure_epic && best < Tier::Epic && can_drop(Tier::Epic) {
+                floor = Tier::Epic;
+            } else if (odds.catalyst || odds.sure_epic) && best < Tier::Rare && can_drop(Tier::Rare)
+            {
+                floor = Tier::Rare;
+            }
         }
+        tier = tier.max(floor);
 
         let wants_new = rng.chance(odds.discovery);
-        let new = if wants_new {
-            pick(phy, &fresh, tier, planet, rng)
+        // A guaranteed floor only picks what reaches it, from the other pool
+        // when the one the card was due to draw from has nothing that rare.
+        let (fresh_reach, owned_reach) =
+            (reaching(phy, &fresh, floor), reaching(phy, &owned, floor));
+        let take_new = if floor > Tier::Common {
+            if wants_new {
+                !fresh_reach.is_empty()
+            } else {
+                owned_reach.is_empty()
+            }
+        } else {
+            wants_new
+        };
+        let new = if take_new {
+            pick(phy, &fresh_reach, tier, planet, rng)
         } else {
             None
         };
@@ -396,9 +422,9 @@ pub fn roll(
                 }
             }
             None => {
-                let i = pick(phy, &owned, tier, planet, rng).unwrap_or(Phylogeny::ROOT);
+                let i = pick(phy, &owned_reach, tier, planet, rng).unwrap_or(Phylogeny::ROOT);
                 // A new species was due but nothing new could live here.
-                let note = wants_new.then(|| {
+                let note = (wants_new && fresh.is_empty()).then(|| {
                     blocked_hint(phy, &seen, planet)
                         .unwrap_or_else(|| "Nothing new could evolve here.".into())
                 });
@@ -568,6 +594,52 @@ mod tests {
         assert!(fresh.iter().any(|c| c.new));
         // Once nothing new is left, a card due to be new says why it isn't.
         assert!(fresh.iter().filter(|c| !c.new).all(|c| c.note.is_some()));
+    }
+
+    /// The root and Dickinsonia owned in a primordial sea: the only Rare
+    /// that can drop is the owned Dickinsonia, and no Epic at all.
+    fn only_an_owned_rare() -> (Phylogeny, Vec<bool>, Planet) {
+        let (phy, mut found) = start();
+        found[idx(&phy, "Dickinsonia")] = true;
+        let planet = Planet::default();
+        assert!(
+            eligible(&phy, &found, &planet)
+                .iter()
+                .all(|&i| phy.taxa[i].eco.tier < Tier::Rare),
+            "nothing new is Rare here"
+        );
+        (phy, found, planet)
+    }
+
+    #[test]
+    fn a_sure_rare_draws_from_the_pool_that_has_one() {
+        let (phy, found, planet) = only_an_owned_rare();
+        let mut rng = Rng::new(5);
+        for discovery in [1.0, 0.5, 0.0] {
+            let odds = Odds {
+                discovery,
+                catalyst: true,
+                ..Odds::default()
+            };
+            for _ in 0..50 {
+                let cards = roll(&phy, &found, &planet, &odds, &mut rng);
+                assert!(tell(&cards) >= Tier::Rare, "{cards:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_sure_epic_out_of_reach_still_keeps_the_rare() {
+        let (phy, found, planet) = only_an_owned_rare();
+        let mut rng = Rng::new(6);
+        let odds = Odds {
+            sure_epic: true,
+            ..Odds::default()
+        };
+        for _ in 0..50 {
+            let cards = roll(&phy, &found, &planet, &odds, &mut rng);
+            assert!(tell(&cards) >= Tier::Rare, "{cards:?}");
+        }
     }
 
     #[test]

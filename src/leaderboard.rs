@@ -17,15 +17,24 @@ fn base_url() -> Option<&'static str> {
 
 /// Seconds before a failed submit is tried again.
 const RETRY_SECS: f64 = 60.0;
+/// When the server cut a score down to its per-hour rate: the wait before
+/// sending it again, so a long-time player keeps climbing.
+const CATCH_UP_SECS: f64 = 1800.0;
 pub const NAME_MIN: usize = 3;
 pub const NAME_MAX: usize = 16;
 
 /// Randomness for a new player ID: the clock, the frame timer's fine
 /// digits and, where there is one, the OS's own randomness (std's hash
 /// keys), so two first launches in the same millisecond still differ.
+/// The web has no OS randomness here: there it also mixes in where the
+/// allocator put a fresh block and how long a little busy work took, which
+/// varies with the page, the browser and the machine.
 pub fn id_seed() -> u64 {
-    let mut seed = (macroquad::miniquad::date::now() * 1000.0) as u64;
-    seed ^= (macroquad::time::get_time() * 1e9) as u64 ^ 0xA5C3_17E5_9B0D_2F41;
+    let mut seed = mix(
+        0xA5C3_17E5_9B0D_2F41,
+        macroquad::miniquad::date::now().to_bits(),
+    );
+    seed = mix(seed, macroquad::time::get_time().to_bits());
     #[cfg(not(target_arch = "wasm32"))]
     {
         use std::hash::{BuildHasher, Hasher};
@@ -33,7 +42,30 @@ pub fn id_seed() -> u64 {
         h.write_u64(seed);
         seed ^= h.finish();
     }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let block = Box::new(seed);
+        seed = mix(seed, &*block as *const u64 as u64);
+        // Spin until the clock ticks, twice: how often it got round
+        // between ticks is noise from the machine.
+        for _ in 0..2 {
+            let start = macroquad::miniquad::date::now();
+            let mut spins = 0u64;
+            while macroquad::miniquad::date::now() == start && spins < 1 << 18 {
+                spins += 1;
+            }
+            seed = mix(seed, spins);
+        }
+    }
     seed
+}
+
+/// splitmix64's finalizer over `seed ^ v`: every bit of `v` reaches all 64.
+fn mix(seed: u64, v: u64) -> u64 {
+    let mut z = (seed ^ v).wrapping_add(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
 }
 
 pub fn valid_id(id: &str) -> bool {
@@ -87,6 +119,20 @@ pub struct Score {
     pub animal: usize,
 }
 
+/// What the server kept of a submit (an older server only sends the rank).
+#[derive(Deserialize, Default)]
+struct Stored {
+    rad: Option<u32>,
+    species: Option<u32>,
+}
+
+impl Stored {
+    /// Whether the server kept less than was sent.
+    fn cut(&self, sent: &Score) -> bool {
+        self.rad.is_some_and(|r| r < sent.rad) || self.species.is_some_and(|n| n < sent.species)
+    }
+}
+
 #[derive(Serialize)]
 struct Submit<'a> {
     id: &'a str,
@@ -130,6 +176,8 @@ pub struct Leaderboard {
     sent: Option<Score>,
     submitting: Option<(Score, Request)>,
     retry_at: f64,
+    /// How long `retry_at` was set ahead, to spot a clock set back.
+    retry_wait: f64,
     fetching: Option<Request>,
     pub view: View,
     pub scroll: f32,
@@ -142,6 +190,7 @@ impl Leaderboard {
             sent: None,
             submitting: None,
             retry_at: 0.0,
+            retry_wait: 0.0,
             fetching: None,
             view: View::Unavailable,
             scroll: 0.0,
@@ -149,7 +198,8 @@ impl Leaderboard {
     }
 
     /// Each frame: sends `score` when it differs from what the server has,
-    /// and collects finished requests. `now` is wall-clock seconds.
+    /// and collects finished requests. `now` is wall-clock seconds; a clock
+    /// set back never holds a retry up for longer than it was meant to wait.
     pub fn update(&mut self, id: &str, score: &Score, now: f64) {
         let done = self
             .submitting
@@ -159,8 +209,16 @@ impl Leaderboard {
         if let Some((reply, sent)) = done {
             self.submitting = None;
             match reply {
-                Ok(_) => {
-                    self.sent = Some(sent);
+                Ok(body) => {
+                    let stored: Stored = serde_json::from_str(&body).unwrap_or_default();
+                    if stored.cut(&sent) {
+                        // Cut to the per-hour rate: the rest goes up later.
+                        self.sent = None;
+                        self.retry_at = now + CATCH_UP_SECS;
+                        self.retry_wait = CATCH_UP_SECS;
+                    } else {
+                        self.sent = Some(sent);
+                    }
                     // A board already loaded now has a stale row for us.
                     if !matches!(self.view, View::Unavailable) {
                         self.refresh(id);
@@ -169,7 +227,10 @@ impl Leaderboard {
                 // Refused: the same score would be refused again, so it waits
                 // until the score changes.
                 Err(Failure::Rejected) => self.sent = Some(sent),
-                Err(Failure::Retry) => self.retry_at = now + RETRY_SECS,
+                Err(Failure::Retry) => {
+                    self.retry_at = now + RETRY_SECS;
+                    self.retry_wait = RETRY_SECS;
+                }
             }
         }
         if let Some(req) = &mut self.fetching {
@@ -180,6 +241,9 @@ impl Leaderboard {
                     .map_or(View::Failed, View::Ready);
                 self.fetching = None;
             }
+        }
+        if self.retry_at - now > self.retry_wait {
+            self.retry_at = now;
         }
         let due = self.sent.as_ref() != Some(score) && now >= self.retry_at;
         if self.enabled && due && self.submitting.is_none() {
@@ -250,5 +314,20 @@ mod tests {
         assert_eq!(v["species"], 121);
         assert_eq!(v["animal"], 148);
         assert_eq!(v["name"], "SwiftSquid42");
+    }
+
+    #[test]
+    fn a_score_cut_by_the_server_is_sent_again() {
+        let sent = Score {
+            name: "SwiftSquid42".into(),
+            rad: 2,
+            species: 121,
+            animal: 0,
+        };
+        let stored = |body: &str| serde_json::from_str::<Stored>(body).unwrap();
+        assert!(stored(r#"{"rank":3,"rad":2,"species":40}"#).cut(&sent));
+        assert!(!stored(r#"{"rank":3,"rad":2,"species":121}"#).cut(&sent));
+        // An older server only answers the rank.
+        assert!(!stored(r#"{"rank":3}"#).cut(&sent));
     }
 }

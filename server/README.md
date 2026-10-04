@@ -20,8 +20,9 @@ server checks what it can with its own clock, which no one else controls:
 
 - a score can't grow faster than real waiting allows (species and RAD per
   hour since the player's last accepted submit);
-- a first submit (a whole save from before the leaderboard) is only capped:
-  up to `TAXA` species and 1000 RAD;
+- a new ID's first submit is cut down to what a new player can have (0 RAD,
+  20 species), so a made-up ID can't take first place at once; a save from
+  before the leaderboard climbs to its real score at the per-hour rates;
 - names are 3 to 16 of `A-Z a-z 0-9 space _ -`;
 - submits less than 5 seconds apart are refused.
 

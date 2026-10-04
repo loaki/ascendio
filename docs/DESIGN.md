@@ -1,7 +1,7 @@
 # Ascendio: game design
 
-> Status: implemented, except the mass extinction and the leaderboard (see
-> "Not done yet" in the README). Every number here is a first guess that
+> Status: implemented, except the mass extinction (see "Not done yet" in
+> the README). Every number here is a first guess that
 > still needs playtesting.
 
 ## The pitch
@@ -22,20 +22,22 @@ because the planet needs time, not because the game makes you wait.
 ```
  ┌──────────────┐    ┌─────────────────┐    ┌───────────────────┐    ┌──────────────┐
  │ SHAPE        │ →  │ ACCELERATE TIME │ →  │ EXPRESS GENOME    │ →  │ STEER        │
- │ spend 1-3 pts│    │ 2 h to 6 h real │    │ 1 to 6 cards,     │    │ pick 1 boon, │
- │ on 5 levers  │    │ = 20 to 60 Ma   │    │ staged reveal     │    │ set keystones│
+ │ spend 1-8 pts│    │ 2 h to 6 h real │    │ 1 to 5 cards +    │    │ pick 1 boon, │
+ │ on 5 levers  │    │ = 20 to 60 Ma   │    │ bonuses, revealed │    │ set keystones│
  └──────────────┘    └─────────────────┘    └───────────────────┘    └──────┬───────┘
         ↑                                                                   │
         └───────────────────────────────────────────────────────────────────┘
 ```
 
-1. **Shape.** Spend **adjustment points** (1 to 3, from the length of the
-   last wait) to move the planet's levers one step each. The background changes as you go.
+1. **Shape.** Spend **adjustment points** (1 to 3 from the length of the
+   last wait, plus keystones and the Tectonics boon, 8 at most) to move the
+   planet's levers one step each. The background changes as you go.
 2. **Accelerate time.** One button. A real-time countdown starts, and the
    spiral and background animate the ages passing. You can close the app.
 3. **Express the genome.** When the timer ends, a new genome waits. Tap
-   it three times to mutate it until it detonates into 3 cards, revealed
-   one at a time, best card last.
+   it three times to mutate it until it detonates into its cards (1 at 2h,
+   5 at 6h, more with keystones and boons), revealed one at a time, best
+   card last.
 4. **Steer.** Pick 1 of 3 **boons** for the next cycle. Optionally re-equip
    your **keystones**, the discovered animals whose bonuses are active.
 5. Back to 1. You can only start a new cycle once the genome is expressed, so
@@ -67,9 +69,14 @@ two 3h ones:
 Half hours in between are interpolated; a fraction is the chance of one
 more card. **Points next** are the adjustment points the next shaping gets
 (before keystones and boons): a long wait buys a big reshape, a short one a
-small tweak. The first shaping and the ones after the tutorial cycles get 3. Keystone bonuses stack on top, with no cap on cards. The tutorial
+small tweak. The first shaping and the ones after the tutorial cycles get 3.
+Keystone bonuses stack on top: no cap on cards, 8 points at most. The tutorial
 cycles pay like a 3h wait, but with 3 cards so the first genomes fill
 the tree.
+
+The tutorial is the first 2 cycles ever: a new Earth (see Human below)
+doesn't reset the cycle count, so it doesn't replay them, and its first
+waits are the chosen 2h to 6h ones from the start.
 
 Each hour is **10 Ma** of in-game time. The HUD shows the total let run so
 far (e.g. "120 Ma", counting up while a cycle runs) and the era, which is the
@@ -232,7 +239,9 @@ Each card:
 There is no pity: nothing is owed after a dry spell. The only guarantees
 are chosen ones, a 6h wait (a Rare or better) and the Catalyst boon (a Rare,
 or an Epic on a 6h wait), and they only fire when an animal that rare can
-drop, new or owned.
+drop, new or owned: an Epic out of reach still gives the Rare, and the sure
+card is an owned one if nothing new is that rare (or a new one if nothing
+owned is).
 
 Cards per genome come from the wait (see Pacing), + keystone and boon
 bonuses, with no cap.
@@ -275,10 +284,11 @@ own planet.
 
 ### The end of the Earth (Human)
 
-Human is the gamble: x2 Luck and +2 cards, but when a genome rolled with
-Human opens, the Earth may end instead: **1 time in 5 for a 4h wait**. The
-chance compounds with the wait (about 11% for 2h, 28% for 6h), so splitting
-a wait into short ones never risks the Earth more often. The roll is made with
+Human is the gamble: x2 keystone and biome Luck (before their cap of 20)
+and +2 cards, but when a genome rolled with Human opens, the Earth may end
+instead: **1 time in 5 for a 4h wait**. The chance compounds with the
+wait (10.6% for 2h, 28.5% for 6h), so splitting a wait into short ones
+never risks the Earth more often. The roll is made with
 the genome, when the wait ends, and saved with it, so reopening the app
 can't change it. While it waits, the genome panel and the EVOLVE IT button
 show the risk ("20% the Earth ends").
@@ -291,7 +301,8 @@ Tapping EVOLVE IT then plays the end of the Earth (`src/collapse.rs`,
 about 9 s, it can't be skipped) instead of the cards, and the genome is
 lost:
 
-1. **The roll.** Red flashes, "1 IN 5".
+1. **The roll.** Red flashes and the wait's odds: "1 IN 9" for 2h,
+   "1 IN 5" for 4h, "1 IN 4" for 6h.
 2. **The flash.** The screen goes solid white, then the white dithers
    away to reveal the Earth frozen into a snowball.
 3. **Snow and ash.** Snow and ash fall on the frozen world as it dims:
@@ -302,7 +313,9 @@ lost:
    There is no choice to make: the radiation is the reward.
 
 **What resets:** the spiral (back to step 0), Ma and era, the planet,
-keystones and their charges, the waiting genome, the points budget.
+keystones and their charges, the waiting genome, the points budget. Not
+the cycle count: the tutorial's 1-minute and 20-minute waits, all-new
+genomes and 3 cards don't come back.
 
 **What stays:** every animal ever found, as a **fossil** with its
 specimens (so its level) and morphs. Fossils show as grey stone with their
@@ -333,25 +346,26 @@ keystones' cap of 20** and **+25% morph chance**, still within the 15%-per-card 
   hothouse), it falls **asleep** and gives nothing. While time runs, the
   planet as launched is the one that counts. Asleep keystones are greyed
   out with the reason, and the Keystones tab gets a warning dot.
-- You can swap them while shaping and while time runs (the genome is rolled
-  from them when the cycle ends). They lock while a genome waits to be
-  opened.
+- You can swap them while shaping and while time runs, but a running wait
+  keeps the ones it was launched with: its genome, its boons (Archaeopteryx),
+  its points, Human's risk and the charges all come from those, and a swap
+  counts from the next wait. They lock while a genome waits to be opened.
 
 **A bonus and a rule.** Each keystone has a **bonus**, what it adds, and a
 **rule**: almost all are flat, a few are special (`src/ecology.rs`, the
 taxa table below).
 
 The bonus's strength is tier units (Common 1, Uncommon 2, Rare 3, Epic 4,
-Legendary 6) × level × morph:
+Legendary 6) × level × morph, except Point, which is a flat +1:
 
 | Bonus | Per unit | Cap |
 |---|---|---|
-| **Luck** | +1 luck (rarer tiers) | 20 from keystones and biomes (after any ×2); the wait's luck comes on top |
+| **Luck** | +1 luck (rarer tiers) | 20 from keystones and biomes, after any ×2 (Megalodon, Human: ×4 together); the wait's and RAD's luck come on top, 50 in all |
 | **Cards** | +12% chance of +1 card | – |
 | **Discovery** | +3% chance a card is a new species | 90% with the wait |
 | **Morphs** | +8% morph chance | ×3 |
-| **Quick** | −3% real wait | −30% |
-| **Point** | +1 adjustment point per 4h waited (earned during the wait, fractions carried over) | 8 points |
+| **Quick** | −3% real wait | −30%; Tailwind's −25% multiplies on top (−47.5% at most) |
+| **Point** | A flat +1 adjustment point per 4h waited, whatever the tier, level or morph (Amber, Albino); earned during the wait, fractions carried over | 8 points |
 
 | Rule | What it does | Who |
 |---|---|---|
@@ -359,20 +373,20 @@ Legendary 6) × level × morph:
 | **Copies** | Copies the keystone in the slot above, if of its kind and not a Legendary; its slot says what it copied | Octopus (a fish), Chimpanzee (a mammal), Parrot (a bird) |
 | **Extremes** | Never asleep; +2 luck per lever at its min or max | Tardigrade |
 | **Fragile** | ×3 luck; but falls asleep after one cycle (a duplicate of it wakes it) | Dodo |
-| **Changing** | Its discovery from the start, +20% per charge (up to 5, so x2): +1 charge per 40 Ma waited on a planet changed since the wait before; a wait on the same planet empties them; but morphs are halved | Tuatara |
-| **Stasis** | Its luck from the start, +20% per charge (up to 5, so x2): +1 charge per 40 Ma waited on exactly the planet of the wait before; a changed planet empties them; but 15% fewer new species | Coelacanth |
+| **Changing** | Its discovery from the start, +20% per charge (up to 5, so x2): +1 charge per 40 Ma waited on a planet changed since the wait before; a wait on the same planet, asleep or sat out (not launched with it) empties them; but morphs are halved | Tuatara |
+| **Stasis** | Its luck from the start, +20% per charge (up to 5, so x2): +1 charge per 40 Ma waited on exactly the planet of the wait before; a changed planet, a wait asleep or sat out empties them; but −15 points of discovery (a 2h wait's 15% drops to 0) | Coelacanth |
 
 **Legendary catches:**
 
 | Legendary | Perk | Catch |
 |---|---|---|
 | T. rex | +2 cards | The keystone in the last slot falls asleep (the one before, if the T. rex is last) |
-| Human | x2 Luck and +2 cards | A 4h wait has 1 in 5 to end the Earth (see below) |
+| Human | x2 keystone and biome Luck (before their cap of 20) and +2 cards | A 4h wait has 1 in 5 to end the Earth: 10.6% at 2h, 28.5% at 6h (see above) |
 | Platypus | Every biome's bonus | The wait is 50% longer |
-| Megalodon | Doubles all Luck | Temperature can't go below Temperate (its button shows red) |
+| Megalodon | x2 keystone and biome Luck, before their cap of 20 (x4 with Human); not the wait's or RAD's | Temperature can't go below Temperate (its button shows red) |
 | Archaeopteryx | Morphs ×3 | One fewer boon to choose from |
 | Tuatara | Discovery growing while the planet changes (above) | Morphs are halved |
-| Coelacanth | Luck growing while the planet stays the same (above) | 15% fewer new species |
+| Coelacanth | Luck growing while the planet stays the same (above) | −15 points of discovery |
 | Dodo | Luck ×3 (above) | Falls asleep after one cycle |
 
 
@@ -386,7 +400,7 @@ only:
 - **Catalyst.** A guaranteed Rare+ card, or Epic+ on a 6h wait (which
   already guarantees a Rare).
 - **Charm.** ×4 morph chance.
-- **Tailwind.** 25% less to wait this cycle.
+- **Tailwind.** 25% less to wait this cycle, on top of the Quick cap.
 - **Tectonics.** +2 adjustment points after a 4h wait, scaled with the wait
   just run (1 for 2h, 3 for 6h).
 
@@ -440,7 +454,7 @@ habitat: L = Land, V = Vegetation, O = Oxygen, T = Temperature.
 | 39 | Shark | Sea | L≤2, O≥3 | R | Better rarity odds |
 | 40 | Ray-finned Fish | Sea or Fresh water | O≥2 | C | Chance of +1 card |
 | 41 | Lobe-finned Fish | Fresh water | O≥2 | R | More new species |
-| 42 | Coelacanth | Sea | O≥2, T≤2 | L | Better rarity odds, growing while the planet stays the same; but 15% fewer new species |
+| 42 | Coelacanth | Sea | O≥2, T≤2 | L | Better rarity odds, growing while the planet stays the same; but 15 points less chance of a new species |
 | 43 | Tetrapod | Shore or Fresh water | V≥2, O≥2 | E | More new species |
 | 44 | Amphibian | Fresh water | V≥2, T≥2 | U | More new species |
 | 45 | Frog | Fresh water | Jungle | C | More morphs |
@@ -555,10 +569,12 @@ habitat: L = Land, V = Vegetation, O = Oxygen, T = Temperature.
 - **The first days** stay in the sea. Sponges, jellies and worms drop
   almost every cycle, which teaches the reveal.
 - **The first real decision** comes with Coral and Octopus. They need a
-  reef, so you must warm the planet to T≥3.
+  reef sea: the start is already Temperate (T3), but Oxygen must reach 3
+  (21%) and Land stay at 1 or less.
 - **Getting out of the water:** Lobe-finned Fish needs fresh water, which
-  needs land and vegetation. Then Tetrapod needs shore, fresh water and
-  vegetation together. It's the first multi-lever puzzle.
+  needs land and vegetation. Then Tetrapod needs shore or fresh water,
+  Oxygen 2 and Vegetation 2 or more together. It's the first multi-lever
+  puzzle.
 - **The Carboniferous gambit:** push Oxygen to 5 through forests. Giant
   dragonflies and spiders appear, and Giant morphs of arthropods triple.
 - **Opposite temperatures:** Wolf and Coelacanth want T≤2, while
@@ -569,12 +585,14 @@ habitat: L = Land, V = Vegetation, O = Oxygen, T = Temperature.
 
 ## Leaderboard
 
-Players are ranked by **most advanced animal**: the depth of the deepest
-discovered taxon. Human is step 16. Ties break by collection size, then by
-who got there first. A secondary board ranks by morphs owned.
+The top 50 players are ranked by **RAD** (Earths Human has ended), then by
+**species found on any Earth** (fossils count, so an ended Earth never
+lowers it), then by who reached that score first. Each row shows the last
+animal the player found; your own row stays pinned at the bottom.
 
 ## Fairness
 
 - No real-money purchases of cycles, genomes or odds, ever.
 - Specimen levels mean every genome moves you forward.
-- The session cap is the cycle timer. Quick bonuses are capped at −30%.
+- The session cap is the cycle timer. Quick bonuses are capped at −30%
+  (−47.5% with Tailwind).

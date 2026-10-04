@@ -43,22 +43,33 @@ pub struct Rays {
 
 pub struct GenomeBg {
     canvas: Canvas,
+    /// Per pixel, its angle around the light's centre (in canvas pixels),
+    /// for the speed lines: kept while the centre and the canvas stay put.
+    angles: Vec<f32>,
+    angles_for: Option<Vec2>,
 }
 
 impl GenomeBg {
     pub fn new() -> Self {
         Self {
-            canvas: Canvas::new(),
+            canvas: Canvas::in_column(),
+            angles: Vec::new(),
+            angles_for: None,
         }
     }
 
     pub fn draw(&mut self, t: f32, rays: Option<&Rays>) {
         if !self.canvas.fits_screen() {
-            self.canvas = Canvas::new();
+            *self = Self::new();
+        }
+        if let Some(r) = rays.filter(|r| r.burst.is_some()) {
+            self.cache_angles(r);
         }
         for y in 0..self.canvas.h as i32 {
+            let f = y as f32 / self.canvas.h as f32;
+            let base = (1.0 - f).powf(1.6) * 0.75;
             for x in 0..W as i32 {
-                let mut c = self.abyss(x, y, t);
+                let mut c = self.abyss(x, y, f, base, t);
                 if let Some(r) = rays {
                     c = self.light(c, x, y, r);
                 }
@@ -69,7 +80,26 @@ impl GenomeBg {
         self.canvas.present();
     }
 
-    fn abyss(&self, x: i32, y: i32, t: f32) -> Rgb {
+    /// The light's centre on the canvas.
+    fn center_of(&self, r: &Rays) -> Vec2 {
+        vec2(r.center.x * W as f32, r.center.y * self.canvas.h as f32)
+    }
+
+    fn cache_angles(&mut self, r: &Rays) {
+        let c = self.center_of(r);
+        if self.angles_for == Some(c) {
+            return;
+        }
+        self.angles = (0..self.canvas.h as i32)
+            .flat_map(|y| {
+                (0..W as i32).map(move |x| (y as f32 + 0.5 - c.y).atan2(x as f32 + 0.5 - c.x))
+            })
+            .collect();
+        self.angles_for = Some(c);
+    }
+
+    /// `f` is the row's depth fraction and `base` its darkening, shared by the row.
+    fn abyss(&self, x: i32, y: i32, f: f32, base: f32, t: f32) -> Rgb {
         const RAMP: [Rgb; 5] = [
             [2, 6, 12],
             [4, 16, 28],
@@ -77,8 +107,7 @@ impl GenomeBg {
             [22, 48, 58],
             [30, 58, 68],
         ];
-        let f = y as f32 / self.canvas.h as f32;
-        let mut v = (1.0 - f).powf(1.6) * 0.75;
+        let mut v = base;
         let ray = noise(x as f32 * 0.07 + y as f32 * 0.035 + t * 0.08, 3.0).powi(3);
         v += ray * (1.0 - f) * 0.5;
         dither(&RAMP, v, x, y)
@@ -101,14 +130,14 @@ impl GenomeBg {
     /// Light on top of the water: `i` counts dither levels (1 = tinted,
     /// 2 = bright, 3 = white-hot), thresholded against the Bayer grid.
     fn light(&self, c: Rgb, x: i32, y: i32, r: &Rays) -> Rgb {
-        let (cx, cy) = (r.center.x * W as f32, r.center.y * self.canvas.h as f32);
-        let (dx, dy) = (x as f32 + 0.5 - cx, y as f32 + 0.5 - cy);
+        let c0 = self.center_of(r);
+        let (dx, dy) = (x as f32 + 0.5 - c0.x, y as f32 + 0.5 - c0.y);
         let d = (dx * dx + dy * dy).sqrt();
         let mut i = r.halo * 1.6 * (1.0 - d / (W as f32 * 0.42)).max(0.0).powi(2);
         let mut col = r.color;
         if let Some(age) = r.burst {
             // Speed lines racing outward.
-            let a = dy.atan2(dx);
+            let a = self.angles[y as usize * W + x as usize];
             let sectors = 60.0;
             let sec = ((a + PI) / TAU * sectors).floor();
             let mid = sec / sectors * TAU - PI + PI / sectors;

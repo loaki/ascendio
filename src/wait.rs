@@ -24,7 +24,8 @@ const POINTS_AT: [(f32, f32); 3] = [(2.0, 1.0), (4.0, 2.0), (6.0, 3.0)];
 const DISCOVERY_AT: [(f32, f32); 3] = [(2.0, 0.15), (4.0, 0.3), (6.0, 0.45)];
 /// From this long, morphs are 1.25x as likely (1.5x at `SURE_RARE_HOURS`).
 pub const MORPH_HOURS: f32 = 4.0;
-/// A wait this long guarantees one Rare-or-better card and doubles morphs.
+/// A wait this long guarantees one Rare-or-better card and makes morphs
+/// 1.5x as likely.
 pub const SURE_RARE_HOURS: f32 = 6.0;
 
 /// Clamps to the dial's range and rounds to its step.

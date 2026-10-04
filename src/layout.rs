@@ -92,7 +92,7 @@ fn measure(
     spans: &mut [f32],
 ) {
     widths[i] = if game.unlocked[i] || game.is_fossil(i) {
-        (measure_label(game.taxon(i).name) + PAD_X + ICON_BUDGET).max(MIN_NODE_W)
+        (measure_label(game.taxon(i).label()) + PAD_X + ICON_BUDGET).max(MIN_NODE_W)
     } else {
         LOCKED_NODE_W
     };

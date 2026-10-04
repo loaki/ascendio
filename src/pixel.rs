@@ -25,6 +25,12 @@ pub fn hash(x: i32, y: i32) -> f32 {
     ((n ^ (n >> 16)) as f32) / u32::MAX as f32
 }
 
+/// `t * rate` wrapped into one turn, in f64 first: a sine of it stays
+/// smooth however long the clock has been running.
+pub fn phase(t: f64, rate: f64) -> f32 {
+    ((t * rate) % std::f64::consts::TAU) as f32
+}
+
 pub fn mix(a: Rgb, b: Rgb, f: f32) -> Rgb {
     let f = f.clamp(0.0, 1.0);
     [0, 1, 2].map(|i| (a[i] as f32 + (b[i] as f32 - a[i] as f32) * f) as u8)
@@ -42,26 +48,38 @@ pub struct Canvas {
     pub h: usize,
     img: Image,
     tex: Texture2D,
+    /// The width it is shown at: the whole screen's, or the UI column's.
+    width: fn() -> f32,
 }
 
 impl Canvas {
+    /// A canvas over the whole screen, drawn outside the UI column.
     pub fn new() -> Self {
-        let h = Self::height_for_screen();
+        Self::shown_at(screen_width)
+    }
+
+    /// A canvas over the UI column (`view::width`), drawn inside it.
+    pub fn in_column() -> Self {
+        Self::shown_at(crate::view::width)
+    }
+
+    fn shown_at(width: fn() -> f32) -> Self {
+        let h = Self::height_for(width);
         let img = Image::gen_image_color(W as u16, h as u16, BLACK);
         let tex = Texture2D::from_image(&img);
         tex.set_filter(FilterMode::Nearest);
-        Self { h, img, tex }
+        Self { h, img, tex, width }
     }
 
-    fn height_for_screen() -> usize {
-        ((screen_height() / screen_width().max(1.0)) * W as f32)
+    fn height_for(width: fn() -> f32) -> usize {
+        ((screen_height() / width().max(1.0)) * W as f32)
             .round()
             .clamp(200.0, 480.0) as usize
     }
 
     /// False once the window has changed shape: time to build a new one.
     pub fn fits_screen(&self) -> bool {
-        Self::height_for_screen() == self.h
+        Self::height_for(self.width) == self.h
     }
 
     /// Off-canvas writes are dropped.
@@ -81,7 +99,7 @@ impl Canvas {
         [d[i], d[i + 1], d[i + 2]]
     }
 
-    /// Uploads what was painted and draws it over the whole screen.
+    /// Uploads what was painted and draws it over the screen (or the column).
     pub fn present(&mut self) {
         self.tex.update(&self.img);
         draw_texture_ex(
@@ -90,7 +108,7 @@ impl Canvas {
             0.0,
             WHITE,
             DrawTextureParams {
-                dest_size: Some(vec2(screen_width(), screen_height())),
+                dest_size: Some(vec2((self.width)(), screen_height())),
                 ..Default::default()
             },
         );
