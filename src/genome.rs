@@ -1,4 +1,4 @@
-//! Rolling a new genome: which animals it can hold, card tiers, pity, morphs
+//! Rolling a new genome: which animals it can hold, card tiers, morphs
 //! and the specimen fallback. Pure logic over a seedable `Rng`.
 
 use serde::{Deserialize, Serialize};
@@ -128,56 +128,6 @@ pub struct Card {
     pub note: Option<String>,
 }
 
-/// Millions of years waited since each tier/morph last dropped: bad luck
-/// becomes a guarantee. Counted in Ma rather than genomes, so short waits
-/// never reach it sooner than long ones.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct Pity {
-    #[serde(default)]
-    pub rare_ma: u32,
-    #[serde(default)]
-    pub epic_ma: u32,
-    #[serde(default)]
-    pub legendary_ma: u32,
-    #[serde(default)]
-    pub morph_ma: u32,
-    pub ever_morphed: bool,
-    /// Saves from before counted genomes; `migrate` turns them into Ma.
-    #[serde(default, skip_serializing)]
-    pub since_rare: Option<u32>,
-    #[serde(default, skip_serializing)]
-    pub since_epic: Option<u32>,
-    #[serde(default, skip_serializing)]
-    pub since_legendary: Option<u32>,
-    #[serde(default, skip_serializing)]
-    pub since_morph: Option<u32>,
-}
-
-impl Pity {
-    /// A save that counted genomes: each one counts as a default wait.
-    pub fn migrate(&mut self) {
-        for (old, ma) in [
-            (&mut self.since_rare, &mut self.rare_ma),
-            (&mut self.since_epic, &mut self.epic_ma),
-            (&mut self.since_legendary, &mut self.legendary_ma),
-            (&mut self.since_morph, &mut self.morph_ma),
-        ] {
-            if let Some(genomes) = old.take() {
-                *ma = (*ma).max(genomes * GENOME_MA);
-            }
-        }
-    }
-}
-
-/// What the pity counts for a genome of the default 4h wait: the limits
-/// below are that many genomes at 4h.
-pub const GENOME_MA: u32 = 40;
-const RARE_PITY: u32 = 3 * GENOME_MA;
-const EPIC_PITY: u32 = 10 * GENOME_MA;
-const LEGENDARY_PITY: u32 = 40 * GENOME_MA;
-/// A fresh player's first morph arrives within this many Ma.
-const FIRST_MORPH_PITY: u32 = 14 * GENOME_MA;
-
 /// Everything that bends the odds for one genome: the wait, keystones and
 /// the chosen boon.
 #[derive(Clone, Debug)]
@@ -193,8 +143,6 @@ pub struct Odds {
     pub catalyst: bool,
     /// At least one card is Epic+ (Catalyst on a 6h wait).
     pub sure_epic: bool,
-    /// Millions of years this genome's wait ran: what it adds to the pity.
-    pub ma: u32,
     /// Radiation's morph multiplier, applied past the usual cap.
     pub morph_rad: f32,
 }
@@ -208,7 +156,6 @@ impl Default for Odds {
             discovery: 1.0,
             catalyst: false,
             sure_epic: false,
-            ma: GENOME_MA,
             morph_rad: 1.0,
         }
     }
@@ -387,13 +334,12 @@ fn owned_pool(phy: &Phylogeny, found: &[bool], planet: &Planet) -> Vec<usize> {
 /// Rolls one genome against the collection before opening. Each card rolls
 /// a rarity, then whether it's a new species (`Odds::discovery`) or one
 /// already owned, which levels it up. Cards come back best last (reveal
-/// order) and `pity` is advanced.
+/// order).
 pub fn roll(
     phy: &Phylogeny,
     found: &[bool],
     planet: &Planet,
     odds: &Odds,
-    pity: &mut Pity,
     rng: &mut Rng,
 ) -> Vec<Card> {
     let mut seen = found.to_vec();
@@ -409,21 +355,19 @@ pub fn roll(
             .map(|c: &Card| c.tier)
             .max()
             .unwrap_or(Tier::Common);
+        // The last card makes good a sure Rare (a 6h wait, Catalyst) or a
+        // sure Epic (Catalyst on a 6h wait) the others didn't bring.
         let mut floor = Tier::Common;
         if last {
-            if (odds.catalyst || pity.rare_ma + odds.ma >= RARE_PITY) && best < Tier::Rare {
+            if odds.catalyst && best < Tier::Rare {
                 floor = floor.max(Tier::Rare);
             }
-            if (odds.sure_epic || pity.epic_ma + odds.ma >= EPIC_PITY) && best < Tier::Epic {
+            if odds.sure_epic && best < Tier::Epic {
                 floor = floor.max(Tier::Epic);
-            }
-            if pity.legendary_ma + odds.ma >= LEGENDARY_PITY && best < Tier::Legendary {
-                floor = floor.max(Tier::Legendary);
             }
         }
         let fresh = eligible(phy, &seen, planet);
-        // Only lift the roll if something that rare can drop, new or owned;
-        // otherwise the pity keeps waiting.
+        // Only lift the roll if something that rare can drop, new or owned.
         let can_drop = |t: Tier| {
             fresh
                 .iter()
@@ -473,30 +417,9 @@ pub fn roll(
     for c in cards.iter_mut() {
         c.morph = roll_morph(phy, c.taxon, planet, odds, rng);
     }
-    // A fresh player's first morph is guaranteed.
-    if !pity.ever_morphed
-        && cards.iter().all(|c| c.morph == Morph::None)
-        && pity.morph_ma + odds.ma >= FIRST_MORPH_PITY
-    {
-        if let Some(c) = cards.last_mut() {
-            c.morph = Morph::Giant;
-        }
-    }
-
     // Best last: tier, then a morph, then novelty.
     cards.sort_by_key(|c| (c.tier, c.morph != Morph::None, c.new));
 
-    let top = tell(&cards);
-    let bump = |since: u32, tier: Tier| if top >= tier { 0 } else { since + odds.ma };
-    pity.rare_ma = bump(pity.rare_ma, Tier::Rare);
-    pity.epic_ma = bump(pity.epic_ma, Tier::Epic);
-    pity.legendary_ma = bump(pity.legendary_ma, Tier::Legendary);
-    if cards.iter().any(|c| c.morph != Morph::None) {
-        pity.morph_ma = 0;
-        pity.ever_morphed = true;
-    } else {
-        pity.morph_ma += odds.ma;
-    }
     cards
 }
 
@@ -537,14 +460,7 @@ mod tests {
             oxygen: 2,
             ..Planet::default()
         };
-        let cards = roll(
-            &phy,
-            &found,
-            &planet,
-            &Odds::default(),
-            &mut Pity::default(),
-            &mut Rng::new(1),
-        );
+        let cards = roll(&phy, &found, &planet, &Odds::default(), &mut Rng::new(1));
         assert_eq!(cards.len(), 3);
         assert!(cards.iter().all(|c| c.new));
     }
@@ -553,7 +469,6 @@ mod tests {
     fn cards_only_ever_hold_what_the_tree_and_planet_allow() {
         let (phy, mut found) = start();
         let mut rng = Rng::new(42);
-        let mut pity = Pity::default();
         let planet = Planet {
             land: 3,
             vegetation: 4,
@@ -562,7 +477,7 @@ mod tests {
             volcanism: 0,
         };
         for _ in 0..60 {
-            let cards = roll(&phy, &found, &planet, &Odds::default(), &mut pity, &mut rng);
+            let cards = roll(&phy, &found, &planet, &Odds::default(), &mut rng);
             for c in &cards {
                 if c.new {
                     let t = &phy.taxa[c.taxon];
@@ -594,14 +509,7 @@ mod tests {
             oxygen: 4,
             ..Planet::default()
         };
-        let cards = roll(
-            &phy,
-            &found,
-            &planet,
-            &Odds::default(),
-            &mut Pity::default(),
-            &mut Rng::new(3),
-        );
+        let cards = roll(&phy, &found, &planet, &Odds::default(), &mut Rng::new(3));
         assert!(cards.iter().all(|c| !c.new), "a mouse can't evolve at sea");
         assert!(cards[0].note.as_deref().unwrap_or("").contains("land"));
     }
@@ -623,7 +531,6 @@ mod tests {
                     cards: 5,
                     ..Odds::default()
                 },
-                &mut Pity::default(),
                 &mut rng,
             );
             for w in cards.windows(2) {
@@ -631,86 +538,6 @@ mod tests {
             }
             assert_eq!(tell(&cards), cards.last().unwrap().tier);
         }
-    }
-
-    #[test]
-    fn rare_pity_fires_once_enough_time_has_run() {
-        let (phy, mut found) = start();
-        // Open the deuterostome line so a Rare (Vertebrate) is reachable.
-        for n in ["Bilaterian", "Deuterostome", "Chordate"] {
-            found[idx(&phy, n)] = true;
-        }
-        let planet = Planet {
-            oxygen: 3,
-            ..Planet::default()
-        };
-        // One default genome short of the limit: this one reaches it.
-        let mut pity = Pity {
-            rare_ma: RARE_PITY - GENOME_MA,
-            ..Pity::default()
-        };
-        let cards = roll(
-            &phy,
-            &found,
-            &planet,
-            &Odds::default(),
-            &mut pity,
-            &mut Rng::new(5),
-        );
-        assert!(tell(&cards) >= Tier::Rare);
-        assert_eq!(pity.rare_ma, 0);
-    }
-
-    #[test]
-    fn pity_waits_when_nothing_that_rare_can_drop() {
-        let (phy, found) = start();
-        let planet = Planet {
-            oxygen: 2,
-            ..Planet::default()
-        };
-        let mut pity = Pity {
-            legendary_ma: LEGENDARY_PITY - GENOME_MA,
-            ..Pity::default()
-        };
-        let cards = roll(
-            &phy,
-            &found,
-            &planet,
-            &Odds::default(),
-            &mut pity,
-            &mut Rng::new(5),
-        );
-        assert!(tell(&cards) < Tier::Legendary);
-        assert_eq!(
-            pity.legendary_ma, LEGENDARY_PITY,
-            "the counter keeps waiting"
-        );
-    }
-
-    #[test]
-    fn a_first_morph_is_guaranteed() {
-        let (phy, found) = start();
-        let planet = Planet {
-            oxygen: 2,
-            ..Planet::default()
-        };
-        let mut pity = Pity {
-            morph_ma: FIRST_MORPH_PITY - GENOME_MA,
-            ..Pity::default()
-        };
-        let cards = roll(
-            &phy,
-            &found,
-            &planet,
-            &Odds {
-                morph_mult: 0.0,
-                ..Odds::default()
-            },
-            &mut pity,
-            &mut Rng::new(2),
-        );
-        assert!(cards.iter().any(|c| c.morph != Morph::None));
-        assert!(pity.ever_morphed);
     }
 
     #[test]
@@ -726,14 +553,7 @@ mod tests {
                 discovery,
                 ..Odds::default()
             };
-            roll(
-                &phy,
-                &found,
-                &planet,
-                &odds,
-                &mut Pity::default(),
-                &mut Rng::new(9),
-            )
+            roll(&phy, &found, &planet, &odds, &mut Rng::new(9))
         };
         let owned = draw(0.0);
         assert!(
@@ -771,81 +591,9 @@ mod tests {
             discovery: 0.0,
             ..Odds::default()
         };
-        let mut pity = Pity {
-            ever_morphed: true,
-            ..Pity::default()
-        };
-        let cards = roll(&phy, &found, &planet, &odds, &mut pity, &mut Rng::new(4));
+        let cards = roll(&phy, &found, &planet, &odds, &mut Rng::new(4));
         let rate = cards.iter().filter(|c| c.morph != Morph::None).count() as f32 / 2000.0;
         assert!(rate < MORPH_CHANCE_MAX + 0.03, "{rate}");
-    }
-
-    #[test]
-    fn short_waits_reach_pity_no_sooner_than_long_ones() {
-        let (phy, mut found) = start();
-        for n in ["Bilaterian", "Deuterostome", "Chordate"] {
-            found[idx(&phy, n)] = true;
-        }
-        let planet = Planet {
-            oxygen: 3,
-            ..Planet::default()
-        };
-        let odds = |ma| Odds {
-            ma,
-            ..Odds::default()
-        };
-        // 100 Ma short of the Rare pity: a 2h wait (20 Ma) doesn't reach
-        // it, however many genomes it takes...
-        let short = Pity {
-            rare_ma: RARE_PITY - 100,
-            ..Pity::default()
-        };
-        // (a seed whose genome rolls no Rare by itself)
-        let mut pity = (1..)
-            .map(|seed| {
-                let mut p = short;
-                let cards = roll(
-                    &phy,
-                    &found,
-                    &planet,
-                    &odds(20),
-                    &mut p,
-                    &mut Rng::new(seed),
-                );
-                (p, tell(&cards))
-            })
-            .find(|(_, top)| *top < Tier::Rare)
-            .map(|(p, _)| p)
-            .unwrap();
-        assert_eq!(pity.rare_ma, RARE_PITY - 80, "a 2h wait adds 20 Ma");
-        // ...while one long wait does.
-        let cards = roll(
-            &phy,
-            &found,
-            &planet,
-            &odds(100),
-            &mut pity,
-            &mut Rng::new(3),
-        );
-        assert!(tell(&cards) >= Tier::Rare);
-    }
-
-    #[test]
-    fn a_save_counting_genomes_moves_to_millions_of_years() {
-        let mut pity: Pity = serde_json::from_str(
-            r#"{"since_rare":2,"since_epic":7,"since_legendary":39,"since_morph":3,"ever_morphed":true}"#,
-        )
-        .unwrap();
-        pity.migrate();
-        assert_eq!(
-            (pity.rare_ma, pity.epic_ma, pity.legendary_ma, pity.morph_ma),
-            (80, 280, 1560, 120)
-        );
-        let saved = serde_json::to_string(&pity).unwrap();
-        assert!(!saved.contains("since_"), "{saved}");
-        let mut again: Pity = serde_json::from_str(&saved).unwrap();
-        again.migrate();
-        assert_eq!(again, pity, "a second load changes nothing");
     }
 
     #[test]

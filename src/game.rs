@@ -4,7 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::ecology::{self, Bonus, Catch, Kin, Rule, Tier};
-use crate::genome::{self, Card, Morph, Odds, Pity, Rng};
+use crate::genome::{self, Card, Morph, Odds, Rng};
 use crate::planet::{self, Biome, Cycle, Lever, Planet};
 use crate::tree::{Phylogeny, Taxon};
 use crate::wait;
@@ -297,7 +297,6 @@ pub struct Game {
     pub wait_hours: f32,
     #[serde(alias = "nodule")]
     pub genome: Option<Vec<Card>>,
-    pub pity: Pity,
     rng: Rng,
     #[serde(alias = "patrons")]
     pub keystones: Vec<usize>,
@@ -372,7 +371,6 @@ impl Game {
             ma_done: 0,
             wait_hours: wait::DEFAULT_HOURS,
             genome: None,
-            pity: Pity::default(),
             rng: Rng::new((now * 1000.0) as u64 ^ 0x9E37_79B9_7F4A_7C15),
             keystones: Vec::new(),
             boon: None,
@@ -445,7 +443,6 @@ impl Game {
         game.level = vec![0; n];
         game.ma_done = header.ma_done.unwrap_or(game.cycles_done * 20);
         game.wait_hours = wait::snap(game.wait_hours);
-        game.pity.migrate();
         game.refresh_levels();
         // Keystone points used to count at once: this shaping keeps them.
         if header.bonus_points.is_none() {
@@ -1074,7 +1071,6 @@ impl Game {
                 // wait that already guarantees a Rare.
                 catalyst: self.boon == Some(Boon::Catalyst) || w.sure_rare,
                 sure_epic: self.boon == Some(Boon::Catalyst) && w.sure_rare,
-                ma: wait::ma(hours),
                 morph_rad: 1.0 + RAD_MORPH * self.rad as f32,
             },
         }
@@ -1135,7 +1131,6 @@ impl Game {
             &self.unlocked,
             &cycle.launched,
             &odds,
-            &mut self.pity,
             &mut self.rng,
         );
         self.genome = Some(rolled);
@@ -1270,7 +1265,7 @@ impl Game {
 
     /// Human ended the Earth: +1 RAD and a new Earth from the Urmetazoan.
     /// Every animal found stays a fossil with its specimens and morphs;
-    /// the planet, the spiral, Ma, keystones, pity and the genome reset.
+    /// the planet, the spiral, Ma, keystones and the genome reset.
     pub fn end_earth(&mut self) {
         let n = self.phy.len();
         self.rad += 1;
@@ -1288,10 +1283,6 @@ impl Game {
         self.genome = None;
         self.doomed = false;
         self.doom_risk = 0.0;
-        self.pity = Pity {
-            ever_morphed: self.pity.ever_morphed,
-            ..Pity::default()
-        };
         self.keystones.clear();
         self.boon = None;
         self.boon_offer = None;
@@ -1852,6 +1843,17 @@ mod tests {
     }
 
     #[test]
+    fn a_save_from_when_pity_existed_still_loads() {
+        let g = Game::new(0.0);
+        let mut v: serde_json::Value = serde_json::from_str(&g.to_json()).unwrap();
+        v.as_object_mut().unwrap().insert(
+            "pity".into(),
+            serde_json::json!({"rare_ma": 80, "since_legendary": 39, "ever_morphed": true}),
+        );
+        assert!(Game::from_json(&v.to_string(), 0.0).is_some());
+    }
+
+    #[test]
     fn the_leaderboard_animal_is_the_last_one_found() {
         let mut g = Game::new(0.0);
         let mut now = 0.0;
@@ -2102,7 +2104,7 @@ mod tests {
         let dodo = equip(&mut g, "Dodo");
         let s = g.keystone_strength(dodo);
         assert_eq!(luck(&report(&g, dodo)), 3.0 * s);
-        g.advance_keystones(g.planet, genome::GENOME_MA);
+        g.advance_keystones(g.planet, u32::from(CHARGE_MA));
         assert!(g.dormant_reason(dodo).unwrap().contains("worn out"));
         g.genome = Some(vec![Card {
             taxon: dodo,
@@ -2127,11 +2129,11 @@ mod tests {
         };
         g.planet = cool;
         let tua = equip(&mut g, "Tuatara");
-        g.advance_keystones(cool, genome::GENOME_MA);
+        g.advance_keystones(cool, u32::from(CHARGE_MA));
         assert_eq!(g.growth[tua], CHARGE_MA);
-        g.advance_keystones(cool, genome::GENOME_MA);
+        g.advance_keystones(cool, u32::from(CHARGE_MA));
         assert_eq!(g.growth[tua], 0, "the same planet twice");
-        g.advance_keystones(Planet { oxygen: 4, ..cool }, genome::GENOME_MA);
+        g.advance_keystones(Planet { oxygen: 4, ..cool }, u32::from(CHARGE_MA));
         assert_eq!(g.growth[tua], CHARGE_MA);
         assert!(report(&g, tua)
             .gains
@@ -2154,10 +2156,10 @@ mod tests {
         assert_eq!(g.dormant_reason(fish), None);
         let s = g.keystone_strength(fish);
         assert_eq!(luck(&report(&g, fish)), s, "its base luck from the start");
-        g.advance_keystones(deep, genome::GENOME_MA);
+        g.advance_keystones(deep, u32::from(CHARGE_MA));
         assert_eq!(g.growth[fish], 0, "nothing to compare the first wait to");
-        g.advance_keystones(deep, genome::GENOME_MA);
-        g.advance_keystones(deep, genome::GENOME_MA);
+        g.advance_keystones(deep, u32::from(CHARGE_MA));
+        g.advance_keystones(deep, u32::from(CHARGE_MA));
         assert_eq!(g.growth[fish], 2 * CHARGE_MA);
         assert!(
             (luck(&report(&g, fish)) - s * 1.4).abs() < 1e-4,
@@ -2165,7 +2167,7 @@ mod tests {
         );
         // Full at 5 charges: twice its base, no more.
         for _ in 0..10 {
-            g.advance_keystones(deep, genome::GENOME_MA);
+            g.advance_keystones(deep, u32::from(CHARGE_MA));
         }
         assert_eq!(g.growth[fish], 5 * CHARGE_MA);
         assert!((luck(&report(&g, fish)) - s * 2.0).abs() < 1e-4);
@@ -2174,7 +2176,7 @@ mod tests {
             "its catch: fewer new species"
         );
         assert_eq!(g.effects().morph_mult_keystone, 1.0, "not the Tuatara's");
-        g.advance_keystones(Planet { oxygen: 3, ..deep }, genome::GENOME_MA);
+        g.advance_keystones(Planet { oxygen: 3, ..deep }, u32::from(CHARGE_MA));
         assert_eq!(g.growth[fish], 0, "the planet changed");
     }
 

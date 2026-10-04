@@ -206,7 +206,7 @@ a glowing 3D double helix, and expressing it is the "pack opening"
 
 Each card:
 
-1. Rolls a **tier** from the weights below, plus luck, with pity applied.
+1. Rolls a **tier** from the weights below, plus luck.
 2. Rolls **discovery**: the chance it's a species you've never found. The
    wait sets it (**2h 15% · 4h 30% · 6h 45%**; the tutorial's genomes are
    all new), keystones, the Primordial sea and the Discovery boon add to it,
@@ -229,15 +229,10 @@ Each card:
 | Epic | 3.5% | purple `#c07bff` |
 | Legendary | 0.5% | gold `#ffc84a` |
 
-**Pity**, counted in millions of years waited (not genomes, so short waits
-never reach it sooner than long ones) and reset when that tier drops:
-
-- Rare+ at least every **120 Ma** (3 default 4h waits).
-- Epic+ within **400 Ma** (10).
-- Legendary within **1600 Ma** (40).
-
-A pity roll only fires when an animal of that tier can drop, new or owned.
-The counter keeps waiting otherwise.
+There is no pity: nothing is owed after a dry spell. The only guarantees
+are chosen ones, a 6h wait (a Rare or better) and the Catalyst boon (a Rare,
+or an Epic on a 6h wait), and they only fire when an animal that rare can
+drop, new or owned.
 
 Cards per genome come from the wait (see Pacing), + keystone and boon
 bonuses, with no cap.
@@ -264,8 +259,7 @@ Morphs stay rare: however keystones, boons, the wait and radiation stack,
 a card is a morph at most 15% of the time.
 
 At Oxygen 5, the Giant chance for arthropods is ×3 (Meganeura: 71 cm
-wingspan at about 35% O₂). Your first morph is guaranteed within your
-first 560 Ma (14 default waits).
+wingspan at about 35% O₂).
 
 ### Specimens (duplicates)
 
@@ -289,8 +283,8 @@ the genome, when the wait ends, and saved with it, so reopening the app
 can't change it. While it waits, the genome panel and the EVOLVE IT button
 show the risk ("20% the Earth ends").
 
-**Nothing pays more for being split into short waits.** Pity, keystone
-charges, keystone points and Human's risk all count the time waited, not
+**Nothing pays more for being split into short waits.** Keystone charges,
+keystone points and Human's risk all count the time waited, not
 the number of genomes; the boons scale with the wait.
 
 Tapping EVOLVE IT then plays the end of the Earth (`src/collapse.rs`,
@@ -308,7 +302,7 @@ lost:
    There is no choice to make: the radiation is the reward.
 
 **What resets:** the spiral (back to step 0), Ma and era, the planet,
-keystones and their charges, pity, the waiting genome, the points budget.
+keystones and their charges, the waiting genome, the points budget.
 
 **What stays:** every animal ever found, as a **fossil** with its
 specimens (so its level) and morphs. Fossils show as grey stone with their
@@ -582,5 +576,5 @@ who got there first. A secondary board ranks by morphs owned.
 ## Fairness
 
 - No real-money purchases of cycles, genomes or odds, ever.
-- Pity timers and specimen levels mean every genome moves you forward.
+- Specimen levels mean every genome moves you forward.
 - The session cap is the cycle timer. Quick bonuses are capped at −30%.

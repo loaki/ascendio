@@ -61,8 +61,8 @@ in `src/ecology.rs`, e.g. frogs need fresh water, a mammoth needs an Ice
 age). Seven biomes (Ice age, Coal swamp, Reef sea, Savanna, Jungle,
 Hothouse, Primordial sea) rule each other out, and the odds follow how much
 of the planet each habitat covers.
-Then each card rolls a rarity tier (60/25/11/3.5/0.5%, with pity at 120,
-400 and 1600 Ma waited), whether it's a new species or one you own
+Then each card rolls a rarity tier (60/25/11/3.5/0.5%), whether it's a new
+species or one you own
 (discovery: 15% at 2h, 30% at 4h, 45% at 6h, plus keystones), and a morph
 (giant 1/40, albino and melanistic 1/128, amber 1/1024). Nothing is ever sold.
 
@@ -291,7 +291,7 @@ src/
 ├── wait.rs      the 2h-6h wait and what each length is worth
 ├── dial.rs      the wait dial drawn around the spiral
 ├── ecology.rs   every taxon's habitat, needs, rarity tier and keystone bonus
-├── genome.rs    what a genome can hold: eligibility, tiers, pity, morphs
+├── genome.rs    what a genome can hold: eligibility, tiers, morphs
 ├── opening.rs   the genome's mutate-and-supernova opening (the "pack opening")
 ├── collapse.rs  the end of the Earth when Human's gamble is lost
 ├── genome_bg.rs the abyss and supernova light behind the opening
@@ -318,7 +318,7 @@ docs/
 
 The rules (`planet.rs`, `ecology.rs`, `genome.rs`, `game.rs`) are pure
 logic with no drawing and a seedable RNG, and they carry most of the tests:
-every taxon can live on some reachable planet, pity only fires when
+every taxon can live on some reachable planet, a sure Rare only comes when
 something that rare can drop, a water world never yields a land animal, and
 a long simulated game keeps progressing.
 
@@ -379,16 +379,16 @@ that need playtesting:
 - `planet.rs`: `cycle_seconds` (1 min, 20 min, then the chosen wait), `BASE_POINTS`, and
   the linked-lever rules in `Planet::after_cycle`.
 - `ecology.rs`: `TABLE`, every taxon's needs, tier and bonus.
-- `genome.rs`: the tier weights in `tier_weights`, the pity windows, and the
-  morph odds in `roll_morph`.
+- `genome.rs`: the tier weights in `tier_weights` and the morph odds in
+  `roll_morph`.
 - `game.rs`: `LEVEL_STEPS` (specimens per level), keystone slot thresholds,
   and each bonus's per-unit effect in `Game::effects`.
 
 ## Saving
 
 `Game::save`/`Game::load` round-trip every durable field (collection,
-specimens, morphs, the planet, the running cycle, the waiting genome, pity
-and the RNG state, keystones, boons) through `serde_json`, using
+specimens, morphs, the planet, the running cycle, the waiting genome, the
+RNG state, keystones, boons) through `serde_json`, using
 [`quad-storage`](https://docs.rs/quad-storage): browser `localStorage` on
 wasm, a local `local.data` file natively. The save carries a version (2); a
 save from the old DNA-pool game fails to parse and a fresh game starts.
