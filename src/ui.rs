@@ -2409,6 +2409,27 @@ fn draw_screen_bar(title: &str, assets: &Assets, gear_lit: bool, trophy_lit: boo
     text_centered(title, sw * 0.5, bar_h * 0.6, bar_h * 0.36, TEXT);
 }
 
+/// The "new version" banner, just under the top bar.
+pub fn update_banner_rect() -> Rect {
+    let (u, bar_h) = (render::u(), render::bar_height());
+    Rect::new(u * 4.0, bar_h + u * 2.0, view::width() - u * 8.0, u * 12.0)
+}
+
+/// Shown when the launch check found a newer release (`update.rs`); a tap
+/// opens its page.
+pub fn draw_update_banner() {
+    let r = update_banner_rect();
+    draw_rectangle(r.x, r.y, r.w, r.h, render::PANEL);
+    draw_rectangle_lines(r.x, r.y, r.w, r.h, 2.0, render::ACCENT_OK);
+    text_centered(
+        "New version available - tap to update",
+        r.x + r.w * 0.5,
+        r.y + r.h * 0.65,
+        r.h * 0.45,
+        TEXT,
+    );
+}
+
 /// The build, in the footer of a full-screen page: `make apk` sets
 /// ASCENDIO_VERSION.
 fn draw_version_footer() {

@@ -61,6 +61,13 @@ import java.util.concurrent.ConcurrentHashMap;
         startActivity(i);
     }
 
+    // The "new version" banner (src/update.rs) opens the release page.
+    public void openUrl(String url) {
+        Intent i = new Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url));
+        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        startActivity(i);
+    }
+
     // --- the leaderboard's HTTP (src/net.rs) ------------------------------
     // A request runs on its own thread; the game polls httpStatus each frame
     // (0 in flight, 1 if nothing answered, else the HTTP status), then takes

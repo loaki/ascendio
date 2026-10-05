@@ -24,6 +24,7 @@ mod spiral;
 mod sprites;
 mod tree;
 mod ui;
+mod update;
 mod view;
 mod wait;
 
@@ -294,6 +295,8 @@ struct App {
     /// Where a page's back arrow returns to.
     page_from: Mode,
     leaderboard: Leaderboard,
+    /// Checks GitHub once at launch for a newer release.
+    update: update::Update,
     /// The name being typed, on a platform without a text box of its own.
     typing: Option<String>,
     /// A native text box for the name is open (Android answers later).
@@ -383,6 +386,7 @@ impl App {
             mode: Mode::Spiral,
             page_from: Mode::Spiral,
             leaderboard: Leaderboard::new(dev.submit),
+            update: update::Update::new(),
             typing: None,
             asking_name: false,
             keystones: KeystoneView::default(),
@@ -520,6 +524,7 @@ impl App {
             &score,
             macroquad::miniquad::date::now(),
         );
+        self.update.update();
         self.keys(now);
 
         let gesture = self.input.poll(dt);
@@ -553,6 +558,13 @@ impl App {
             ui::panel_rect()
         };
 
+        if self.update.page.is_some()
+            && !self.overlay_up()
+            && tap.is_some_and(|p| ui::update_banner_rect().contains(p))
+        {
+            tap = None;
+            self.update.open();
+        }
         self.overlay_taps(&mut tap, &gesture, now);
         self.keystone_menu_tap(&mut tap);
         self.cancel_tap(&mut tap);
@@ -1249,6 +1261,9 @@ impl App {
         }
         if let Some(op) = &mut self.opening {
             op.draw(game, &self.sprites, &self.assets);
+        }
+        if self.update.page.is_some() && !self.overlay_up() {
+            ui::draw_update_banner();
         }
         if self.rad_info {
             ui::draw_rad_info(game);
