@@ -1,6 +1,6 @@
 """The planet palette: every colour a sprite may use.
 
-Taken from `src/backdrop.rs` (rock, ash, snow, vegetation, sea, sky, lava,
+Taken from `src/gfx/backdrop.rs` (rock, ash, snow, vegetation, sea, sky, lava,
 trunk) plus creature accents muted to the same saturation, so animals look
 painted with the same paints as the world they live in.
 """

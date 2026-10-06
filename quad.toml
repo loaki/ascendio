@@ -1,5 +1,5 @@
 # Read by cargo-quad-apk (`make apk`): Java added to the Android build for
-# the "genome ready" notification (src/notify.rs).
+# the "genome ready" notification (src/platform/notify.rs).
 main_activity_inject = "android/main_activity_inject.java"
 java_files = ["java/com/loaki/ascendio/GenomeJob.java"]
 # Each name becomes <service android:name="..." android:enabled="true">.

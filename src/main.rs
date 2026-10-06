@@ -1,34 +1,15 @@
-//! Ascendio -- a daily game about the animal tree of life: shape the planet,
-//! let time run, evolve the genome it produced. See `docs/DESIGN.md`.
+//! Ascendio: a daily game about the animal tree of life (entry point and game loop).
 
-mod backdrop;
-mod clock;
-mod collapse;
-mod dial;
-mod ecology;
 mod game;
-mod genome;
-mod genome_bg;
-mod layout;
-mod leaderboard;
-mod names;
-mod net;
-mod notify;
-mod opening;
-mod pixel;
-mod planet;
-mod render;
-mod save;
-mod settings;
-mod spiral;
-mod sprites;
-mod tree;
+mod gfx;
+mod platform;
 mod ui;
-mod update;
-mod view;
-mod wait;
 
 use macroquad::prelude::*;
+
+use game::{leaderboard, names, planet, settings, wait};
+use gfx::{backdrop, collapse, dial, layout, opening, render, spiral, sprites, view};
+use platform::{clock, net, notify, save, update};
 
 use backdrop::Backdrop;
 use collapse::Collapse;
@@ -44,7 +25,6 @@ use sprites::Sprites;
 use ui::{Assets, KeystoneView, Menu, SettingsView};
 use view::{Camera, Gesture, Input};
 
-/// How hard you have to pinch closed before the map opens.
 const PINCH_TO_MAP: f32 = 0.82;
 
 #[derive(PartialEq, Clone, Copy)]
@@ -57,7 +37,6 @@ enum Mode {
 }
 
 impl Mode {
-    /// The full-screen pages, opened from the top bar.
     fn is_page(self) -> bool {
         matches!(self, Mode::Settings | Mode::Leaderboard)
     }
@@ -77,24 +56,17 @@ fn env_parse<T: std::str::FromStr>(key: &str) -> Option<T> {
     std::env::var(key).ok().and_then(|v| v.parse().ok())
 }
 
-/// `ASCENDIO_SHOT_MODE`: what a capture shows.
 #[derive(PartialEq, Clone, Copy)]
 enum ShotKind {
     Map,
     Spiral,
-    /// The spiral with the wait dial up.
     Dial,
     Keystones,
     Settings,
     Leaderboard,
-    /// The map with the biome guide open.
     Biomes,
-    /// The end of the Earth from the start (`ASCENDIO_SHOT_AFTER` picks the
-    /// moment).
     Collapse,
-    /// The planet alone, no spiral or UI.
     Backdrop,
-    /// The page of the most advanced animal.
     Detail,
 }
 
@@ -115,7 +87,6 @@ impl ShotKind {
         })
     }
 
-    /// The screen it forces, if any.
     fn mode(self) -> Option<Mode> {
         match self {
             Self::Map | Self::Biomes => Some(Mode::Map),
@@ -128,7 +99,6 @@ impl ShotKind {
     }
 }
 
-/// A framebuffer capture: write `path` after `after` seconds, then exit.
 struct Shot {
     path: String,
     after: f32,
@@ -141,13 +111,9 @@ struct Shot {
 /// Dev aids, all read from `ASCENDIO_*` environment variables (see the
 /// README). None of them exist on the web build, so it always plays for real.
 struct Dev {
-    /// `ASCENDIO_TIME_SCALE=3600` makes an hour pass every second.
     time_scale: f64,
-    /// `ASCENDIO_AUTOPLAY`: shape, run and open cycles by itself.
     autoplay: bool,
-    /// `ASCENDIO_DEV`: T ends the running cycle, R resets the game.
     keys: bool,
-    /// Off for autoplay and `ASCENDIO_SCRATCH`: start from a fresh game.
     load: bool,
     /// Writes the real save. Off as well with a sped-up clock or a forced
     /// planet: they play on the real save without changing it.
@@ -155,10 +121,7 @@ struct Dev {
     /// Goes on the leaderboard: a real game, played in real time, never a
     /// dev run.
     submit: bool,
-    /// `ASCENDIO_DEMO_TAPS=n`: start on a ready genome and tap it `n` times.
     demo_taps: Option<u32>,
-    /// `ASCENDIO_SHOT=out.png`, `ASCENDIO_SHOT_AFTER` (default 5) and
-    /// `ASCENDIO_SHOT_MODE=map|spiral|dial|keystones|settings|leaderboard|biomes|collapse|backdrop|detail`.
     shot: Option<Shot>,
 }
 
@@ -192,12 +155,10 @@ impl Dev {
         }
     }
 
-    /// Whether the capture asked for is `kind`.
     fn shot_is(&self, kind: ShotKind) -> bool {
         self.shot.as_ref().is_some_and(|s| s.kind == Some(kind))
     }
 
-    /// `ASCENDIO_PLANET=land,veg,o2,temp,volc` forces the planet.
     fn planet_override() -> Option<planet::Planet> {
         let spec = std::env::var("ASCENDIO_PLANET").ok()?;
         let v: Vec<u8> = spec
@@ -262,7 +223,6 @@ fn leave() -> bool {
     false
 }
 
-/// The deepest taxon just discovered: where the spiral glides to.
 fn deepest(game: &Game, opened: &[game::Opened]) -> Option<usize> {
     opened
         .iter()
@@ -275,10 +235,9 @@ fn map_layout(game: &Game) -> Layout {
     layout::compute(game, &|s| render::text_width(s, render::LABEL_PX))
 }
 
-/// Everything the game loop keeps between frames.
 struct App {
     dev: Dev,
-    /// Wall-clock time the player can't wind forward (`clock.rs`), so
+    /// Wall-clock time the player can't wind forward (`platform/clock.rs`), so
     /// time with the app closed still counts.
     clock: clock::Clock,
     game: Game,
@@ -292,31 +251,21 @@ struct App {
     cam: Camera,
     input: Input,
     mode: Mode,
-    /// Where a page's back arrow returns to.
     page_from: Mode,
     leaderboard: Leaderboard,
-    /// Checks GitHub once at launch for a newer release.
     update: update::Update,
-    /// The name being typed, on a platform without a text box of its own.
     typing: Option<String>,
-    /// A native text box for the name is open (Android answers later).
     asking_name: bool,
     keystones: KeystoneView,
-    /// The animal page open over everything.
     detail: Option<usize>,
-    /// The biome guide, opened from the map.
     biomes_open: bool,
     opening: Option<Opening>,
-    /// Human ended the Earth: plays instead of the opening.
     collapse: Option<Collapse>,
-    /// The radiation panel under the RAD badge.
     rad_info: bool,
     boon_hover: Option<usize>,
     pinch_accum: f32,
     last_phase: Phase,
-    /// The wait dial is up (after tapping LET TIME RUN).
     choosing: bool,
-    /// Horizontal drag, in pixels, not yet turned into dial steps.
     dial_swipe: f32,
     /// CANCEL was tapped once while time runs; a second tap gives up the wait.
     cancel_armed: bool,
@@ -326,7 +275,6 @@ struct App {
     /// The backdrop's clock: it hurries while time runs, without jumps.
     world_t: f64,
     elapsed: f32,
-    /// Frames written by `ASCENDIO_SHOT_EVERY`.
     frame_no: u32,
     save_timer: f32,
     autoplay_timer: f32,
@@ -448,8 +396,6 @@ impl App {
         Frame::build(&self.game, &self.nav, &|s, px| render::text_width(s, px))
     }
 
-    /// Back to the spiral with nothing open, for a game that just changed
-    /// wholesale (a reset, a new Earth).
     fn reset_views(&mut self) {
         self.nav = Nav::new(&self.game);
         self.layout = map_layout(&self.game);
@@ -459,7 +405,6 @@ impl App {
         self.choosing = false;
     }
 
-    /// The map, fitted to the tree, from the spiral; otherwise the spiral.
     fn toggle_map(&mut self) {
         self.mode = match self.mode {
             Mode::Spiral => {
@@ -470,7 +415,6 @@ impl App {
         };
     }
 
-    /// EVOLVE IT: the genome opens, unless Human's gamble ends the Earth.
     fn evolve(&mut self, now: f64) {
         if self.game.doomed {
             self.collapse = Some(Collapse::with_risk(self.game.doom_risk));
@@ -481,8 +425,6 @@ impl App {
         }
     }
 
-    /// One frame: input, then the clock-driven updates, then drawing.
-    /// Returns false to quit.
     fn frame(&mut self) -> bool {
         // Recording frames: a fixed step, however slow the export. Otherwise
         // capped, so coming back from the background is not one giant step.
@@ -629,9 +571,6 @@ impl App {
         self.export(capture)
     }
 
-    /// Something is up over the screen and takes the input: the end of the
-    /// Earth, the opening, an animal's page, the biome guide, the RAD panel,
-    /// the boon pick, an open dropdown or a name being asked.
     fn overlay_up(&self) -> bool {
         self.full_screen_overlay()
             || self.rad_info
@@ -640,8 +579,6 @@ impl App {
             || self.asking_name
     }
 
-    /// An overlay over the whole screen: the end of the Earth, the opening,
-    /// an animal's page, the biome guide or the boon pick.
     fn full_screen_overlay(&self) -> bool {
         self.collapse.is_some()
             || self.opening.is_some()
@@ -650,9 +587,6 @@ impl App {
             || self.game.phase() == Phase::Boon
     }
 
-    /// Escape, or Android's Back: closes what is on top. With nothing open
-    /// it leaves the game (on the desktop) or sends it to the background
-    /// (on Android); the web page stays. Returns false to quit.
     fn back(&mut self) -> bool {
         if self.collapse.is_some() || self.opening.is_some() || self.game.phase() == Phase::Boon {
             // These play out, or need a pick: Back does nothing.
@@ -678,8 +612,6 @@ impl App {
         true
     }
 
-    /// Dev keys (R resets the game, T ends the running cycle) and M for the
-    /// map; none while a name is being typed.
     fn keys(&mut self, now: f64) {
         if self.typing.is_some() {
             return;
@@ -696,7 +628,6 @@ impl App {
         }
     }
 
-    /// Arrow keys step the wait dial while it's up.
     fn dial_keys(&mut self) {
         let dial_live = self.choosing
             && self.mode == Mode::Spiral
@@ -713,7 +644,6 @@ impl App {
         }
     }
 
-    /// `ASCENDIO_DEMO_TAPS`: opens the ready genome and taps through it.
     fn demo(&mut self, dt: f32, tap: &mut Option<Vec2>) {
         if self.dev.demo_taps.is_none() {
             return;
@@ -729,9 +659,6 @@ impl App {
         }
     }
 
-    /// Overlays eat taps first: the end of the Earth, the RAD panel, the
-    /// opening, the biome guide, an animal's page, the boon pick; then the
-    /// RAD badge, when none of them is up.
     fn overlay_taps(&mut self, tap: &mut Option<Vec2>, gesture: &Gesture, now: f64) {
         if let Some(c) = &mut self.collapse {
             if tap.take().is_some() {
@@ -782,8 +709,6 @@ impl App {
         }
     }
 
-    /// An open dropdown takes the tap before the bottom bar: a pick, or
-    /// anywhere else to close it.
     fn keystone_menu_tap(&mut self, tap: &mut Option<Vec2>) {
         let view = &mut self.keystones;
         let (Some(menu), Some(p)) = (view.menu, *tap) else {
@@ -835,8 +760,6 @@ impl App {
         }
     }
 
-    /// The trophy and the gear open their pages; on a page, every tap stays
-    /// there (no bottom bar).
     fn page_taps(&mut self, tap: &mut Option<Vec2>, now: f64) {
         let Some(p) = *tap else { return };
         let page = [
@@ -922,7 +845,6 @@ impl App {
         }
     }
 
-    /// Takes `raw` as the leaderboard name, if anything usable is left.
     fn set_name(&mut self, raw: &str) {
         if let Some(name) = leaderboard::clean_name(raw) {
             self.settings.name = name;
@@ -938,7 +860,6 @@ impl App {
         }
     }
 
-    /// The platform's text box: answers at once on the web, later on Android.
     fn ask_name(&mut self) {
         let current = self.settings.name.clone();
         if let Some(answer) = net::ask_text("Your name on the leaderboard", &current) {
@@ -949,7 +870,6 @@ impl App {
         }
     }
 
-    /// Typing the name on the game's own keyboard: Enter saves, Escape drops.
     fn type_name(&mut self) {
         let Some(typed) = &mut self.typing else {
             return;
@@ -969,7 +889,6 @@ impl App {
         }
     }
 
-    /// The tabs, the action button, and the lever panel's own taps.
     fn bottom_bar_taps(&mut self, tap: &mut Option<Vec2>, panel: Rect, now: f64) {
         let Some(p) = *tap else { return };
         *tap = None;
@@ -993,7 +912,6 @@ impl App {
                     self.mode = Mode::Spiral;
                 }
                 Phase::Shape if self.game.wait_choosable() => {
-                    // The dial lives on the spiral screen.
                     self.mode = Mode::Spiral;
                     self.choosing = true;
                 }
@@ -1078,7 +996,6 @@ impl App {
             self.pinch_accum = 1.0;
         }
         if let Some(p) = tap {
-            // The levers are hidden while the dial is up.
             let lever_hit = Lever::ALL
                 .iter()
                 .enumerate()
@@ -1137,7 +1054,6 @@ impl App {
             view.scroll =
                 (view.scroll - gesture.drag.y).clamp(0.0, ui::keystones_max_scroll(game, view));
         }
-        // An open dropdown already took the tap (`keystone_menu_tap`).
         let Some(p) = tap else { return };
         if let Some(menu) = [Menu::Sort, Menu::Filter]
             .into_iter()
@@ -1172,7 +1088,6 @@ impl App {
         }
     }
 
-    /// The opening and the end of the Earth play on.
     fn animate(&mut self, dt: f32) {
         if let Some(op) = &mut self.opening {
             op.update(dt);
@@ -1216,7 +1131,6 @@ impl App {
                     let frame = self.spiral_frame();
                     render::draw_spiral(game, &frame, self.nav.t, self.nav.last(), &self.sprites);
                     ui::draw_hud(game, now, &self.assets);
-                    // The end of the Earth gets the whole screen.
                     if self.collapse.is_none() {
                         if self.choosing {
                             ui::draw_wait_panel(game, &self.sprites);
@@ -1251,7 +1165,6 @@ impl App {
         if game.phase() == Phase::Boon && self.opening.is_none() {
             ui::draw_boons(game, &self.sprites, &self.assets, self.boon_hover);
         }
-        // The guide belongs to the map: leaving it closes the guide.
         self.biomes_open &= self.mode == Mode::Map;
         if self.biomes_open {
             ui::draw_biomes(game, &self.sprites);
@@ -1283,8 +1196,6 @@ impl App {
         self.brightness.apply(self.settings.brightness);
     }
 
-    /// Writes the `ASCENDIO_SHOT*` captures. Returns false once the final
-    /// one is written.
     fn export(&mut self, capture: bool) -> bool {
         let Some(shot) = &self.dev.shot else {
             return true;

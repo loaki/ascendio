@@ -1,6 +1,5 @@
 // Spliced into miniquad's MainActivity by cargo-quad-apk (see quad.toml):
-// each "//%" block lands at the matching marker. src/notify.rs and
-// src/net.rs call these.
+// each "//%" block lands at the matching marker. src/platform/ calls these.
 
 //% IMPORTS
 import android.app.NotificationManager;
@@ -61,14 +60,14 @@ import java.util.concurrent.ConcurrentHashMap;
         startActivity(i);
     }
 
-    // The "new version" banner (src/update.rs) opens the release page.
+    // The "new version" banner (platform/update.rs) opens the release page.
     public void openUrl(String url) {
         Intent i = new Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url));
         i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         startActivity(i);
     }
 
-    // --- the leaderboard's HTTP (src/net.rs) ------------------------------
+    // --- the leaderboard's HTTP (platform/net.rs) ------------------------------
     // A request runs on its own thread; the game polls httpStatus each frame
     // (0 in flight, 1 if nothing answered, else the HTTP status), then takes
     // the body once.
@@ -128,7 +127,7 @@ import java.util.concurrent.ConcurrentHashMap;
         return r == null ? "" : r[1];
     }
 
-    // --- the name dialog (src/net.rs) -------------------------------------
+    // --- the name dialog (platform/net.rs) -------------------------------------
     // promptStatus: 0 nothing asked, 1 open, 2 answered (text, or null if
     // cancelled); promptTake hands the answer over and goes back to 0.
 
@@ -186,7 +185,7 @@ import java.util.concurrent.ConcurrentHashMap;
         });
     }
 
-    // --- the trusted clock (src/clock.rs) ---------------------------------
+    // --- the trusted clock (platform/clock.rs) ---------------------------------
     // Uptime that changing the phone's time doesn't move, and the restart
     // counter that says when it started over (-1 if unknown).
 

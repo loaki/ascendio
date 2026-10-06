@@ -1,4 +1,4 @@
-// The game's own browser calls (src/net.rs): fetch for the leaderboard and
+// The game's own browser calls (platform/net.rs): fetch for the leaderboard and
 // prompt for the player's name. Needs sapp_jsutils.js for the strings.
 (function () {
     var requests = {};
