@@ -398,6 +398,30 @@ impl Opening {
         }
     }
 
+    /// A tap on an already revealed card's slot replays its reveal, from the card itself. Returns
+    /// whether the tap was used.
+    pub fn tap_slot(&mut self, at: Vec2) -> bool {
+        let Stage::Showcase(current) = self.stage else {
+            return false;
+        };
+        let n = self.opened.len();
+        let (_, size) = slot_layout(n);
+        let hit = (0..n).find(|&k| {
+            let c = slot_pos(k, n);
+            self.flipped[k] > 0.0
+                && Rect::new(c.x - size.x * 0.5, c.y - size.y * 0.5, size.x, size.y).contains(at)
+        });
+        let Some(k) = hit else { return false };
+        if k == current && self.t < REVEAL_AT {
+            return false;
+        }
+        // Straight to the revealed card: no roulette, no flash.
+        self.stage = Stage::Showcase(k);
+        self.t = REVEAL_AT;
+        self.reveal_fired = true;
+        true
+    }
+
     fn reveal_next(&mut self) {
         let u = render::u();
         let Some(i) = self.flipped.iter().position(|&f| f <= 0.0) else {
@@ -462,7 +486,7 @@ impl Opening {
         let (_, size) = slot_layout(n);
         for (k, o) in self.opened.iter().enumerate() {
             let c = slot_pos(k, n);
-            if k < current || (k == current && shown) {
+            if self.flipped[k] > 0.0 && (k != current || shown) {
                 draw_filled_slot(game, sprites, o, c, size);
             } else {
                 draw_empty_slot(c, size, k == current);

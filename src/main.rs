@@ -682,7 +682,7 @@ impl App {
                 self.rad_info = false;
             }
         } else if let Some(op) = &mut self.opening {
-            if tap.take().is_some() {
+            if tap.take().is_some_and(|at| !op.tap_slot(at)) {
                 let results = op.wants_results().then(|| self.game.open_genome(now));
                 let discovered = results.as_ref().and_then(|r| deepest(&self.game, r));
                 let meters = results.as_ref().map(|r| opening::meters(&mut self.game, r));
