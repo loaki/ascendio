@@ -256,6 +256,8 @@ struct App {
     update: update::Update,
     typing: Option<String>,
     asking_name: bool,
+    /// RESET was tapped once on the settings page.
+    reset_armed: bool,
     keystones: KeystoneView,
     detail: Option<usize>,
     biomes_open: bool,
@@ -336,6 +338,7 @@ impl App {
             leaderboard: Leaderboard::new(dev.submit),
             update: update::Update::new(),
             typing: None,
+            reset_armed: false,
             asking_name: false,
             keystones: KeystoneView::default(),
             detail: None,
@@ -389,6 +392,7 @@ impl App {
             language: self.settings.language,
             name: self.settings.name.clone(),
             typing: self.typing.clone(),
+            reset_armed: self.reset_armed,
         }
     }
 
@@ -458,14 +462,22 @@ impl App {
         let score = Score {
             name: self.settings.name.clone(),
             rad: self.game.rad,
-            species: self.game.species_ever() as u32,
+            // The server refuses 0: a fresh game still counts the ancestor.
+            species: (self.game.species_ever() as u32).max(1),
             animal: self.game.showcase(),
+            reset: self.settings.fresh_start,
         };
-        self.leaderboard.update(
+        let reset_done = self.leaderboard.update(
             &self.settings.player_id,
             &score,
             macroquad::miniquad::date::now(),
         );
+        if reset_done {
+            self.settings.fresh_start = false;
+            if self.dev.persist {
+                self.settings.save();
+            }
+        }
         self.update.update();
         self.keys(now);
 
@@ -493,6 +505,7 @@ impl App {
         if self.mode != Mode::Keystones {
             self.keystones.menu = None;
         }
+        self.reset_armed &= self.mode == Mode::Settings;
         self.dial_keys();
         let panel = if self.choosing {
             ui::wait_panel_rect()
@@ -798,6 +811,15 @@ impl App {
     }
 
     fn settings_page_tap(&mut self, p: Vec2, now: f64) {
+        let armed = std::mem::take(&mut self.reset_armed);
+        if ui::reset_button_rect().contains(p) {
+            if armed {
+                self.reset_account(now);
+            } else {
+                self.reset_armed = true;
+            }
+            return;
+        }
         if ui::name_button_rect().contains(p) {
             if net::has_text_box() {
                 self.asking_name = true;
@@ -843,6 +865,32 @@ impl App {
                 }
             }
         }
+    }
+
+    /// A brand-new game under the same name and ID; the leaderboard forgets the old score.
+    fn reset_account(&mut self, now: f64) {
+        if self.dev.persist {
+            save::clear();
+        }
+        self.game = Game::new(now);
+        self.settings.fresh_start = true;
+        if self.dev.persist {
+            self.settings.save();
+        }
+        self.leaderboard = Leaderboard::new(self.dev.submit);
+        self.layout = map_layout(&self.game);
+        self.nav = Nav::new(&self.game);
+        self.nav.go_to(&self.game, self.game.most_advanced());
+        self.keystones = KeystoneView::default();
+        self.detail = None;
+        self.biomes_open = false;
+        self.opening = None;
+        self.collapse = None;
+        self.choosing = false;
+        self.last_phase = self.game.phase();
+        self.mode = Mode::Spiral;
+        self.save();
+        self.sync_notify(now);
     }
 
     fn set_name(&mut self, raw: &str) {

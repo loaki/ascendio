@@ -111,6 +111,9 @@ pub struct Score {
     pub rad: u32,
     pub species: u32,
     pub animal: usize,
+    /// The player started over: the server drops their old row.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub reset: bool,
 }
 
 #[derive(Deserialize, Default)]
@@ -192,7 +195,9 @@ impl Leaderboard {
     /// Each frame: sends `score` when it differs from what the server has,
     /// and collects finished requests. `now` is wall-clock seconds; a clock
     /// set back never holds a retry up for longer than it was meant to wait.
-    pub fn update(&mut self, id: &str, score: &Score, now: f64) {
+    /// True once the server has accepted a score with `reset` set.
+    pub fn update(&mut self, id: &str, score: &Score, now: f64) -> bool {
+        let mut reset_done = false;
         let done = self
             .submitting
             .as_mut()
@@ -209,7 +214,11 @@ impl Leaderboard {
                         self.retry_at = now + CATCH_UP_SECS;
                         self.retry_wait = CATCH_UP_SECS;
                     } else {
-                        self.sent = Some(sent);
+                        reset_done = sent.reset;
+                        self.sent = Some(Score {
+                            reset: false,
+                            ..sent
+                        });
                     }
                     // A board already loaded now has a stale row for us.
                     if !matches!(self.view, View::Unavailable) {
@@ -245,6 +254,7 @@ impl Leaderboard {
                 self.submitting = Some((score.clone(), req));
             }
         }
+        reset_done
     }
 
     pub fn refresh(&mut self, id: &str) {
@@ -291,6 +301,7 @@ mod tests {
             rad: 3,
             species: 121,
             animal: 148,
+            reset: false,
         };
         let v: serde_json::Value = serde_json::from_str(
             &serde_json::to_string(&Submit {
@@ -314,6 +325,7 @@ mod tests {
             rad: 2,
             species: 121,
             animal: 0,
+            reset: false,
         };
         let stored = |body: &str| serde_json::from_str::<Stored>(body).unwrap();
         assert!(stored(r#"{"rank":3,"rad":2,"species":40}"#).cut(&sent));

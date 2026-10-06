@@ -2,7 +2,7 @@
 // (schema.sql). Players are ranked by RAD, then by species found on any
 // Earth; on a tie, whoever got there first.
 //
-//   POST /score  {id, name, rad, species, animal}  -> {rank, rad, species}
+//   POST /score  {id, name, rad, species, animal, reset?}  -> {rank, rad, species}
 //   GET  /top?id=<player id>                      -> {top, me, players}
 //
 // The game is client-side, so a score can always be forged. What the server
@@ -77,7 +77,12 @@ async function submit(req, env) {
 
   const db = env.DB;
   const now = Date.now();
-  const old = await db.prepare("SELECT * FROM scores WHERE player_id = ?").bind(id).first();
+  // "reset": the player started over, so their old row is forgotten and the
+  // score is treated like a new ID's first.
+  const old =
+    body.reset === true
+      ? null
+      : await db.prepare("SELECT * FROM scores WHERE player_id = ?").bind(id).first();
   if (old && now - old.updated < MIN_GAP_MS) return fail("too fast", 429);
 
   // Best scores only ever grow, and no faster than the per-hour rates: a

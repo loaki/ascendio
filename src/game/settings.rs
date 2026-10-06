@@ -22,6 +22,9 @@ pub struct Settings {
     pub name: String,
     #[serde(default)]
     pub language: Language,
+    /// Set by RESET until the leaderboard has dropped the old score.
+    #[serde(default)]
+    pub fresh_start: bool,
 }
 
 fn default_brightness() -> u8 {
@@ -45,6 +48,7 @@ impl Default for Settings {
             player_id: String::new(),
             name: String::new(),
             language: Language::default(),
+            fresh_start: false,
         }
     }
 }

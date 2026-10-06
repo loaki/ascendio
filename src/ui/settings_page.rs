@@ -11,6 +11,8 @@ pub struct SettingsView {
     pub language: Language,
     pub name: String,
     pub typing: Option<String>,
+    /// RESET was tapped once; a second tap erases the account.
+    pub reset_armed: bool,
 }
 
 pub(super) fn draw_screen_bar(title: &str, assets: &Assets, gear_lit: bool, trophy_lit: bool) {
@@ -91,6 +93,65 @@ pub(super) fn settings_panel_rect() -> Rect {
 pub(super) fn display_panel_rect() -> Rect {
     let (n, u) = (settings_panel_rect(), render::u());
     Rect::new(n.x, n.y + n.h + u * 6.0, n.w, u * 50.0)
+}
+
+pub(super) fn reset_panel_rect() -> Rect {
+    let (d, u) = (display_panel_rect(), render::u());
+    Rect::new(d.x, d.y + d.h + u * 6.0, d.w, u * 34.0)
+}
+
+pub fn reset_button_rect() -> Rect {
+    let (p, u) = (reset_panel_rect(), render::u());
+    let (w, h) = (u * 34.0, u * 13.0);
+    Rect::new(p.x + p.w - u * 5.0 - w, p.y + u * 16.0, w, h)
+}
+
+pub(super) fn draw_reset_panel(view: &SettingsView) {
+    let (p, u) = (reset_panel_rect(), render::u());
+    frame(p, PANEL, EDGE, 1.0);
+    let x = p.x + u * 6.0;
+    let px = u * 7.5;
+    text("ACCOUNT", x, p.y + u * 10.0, px, ACCENT_WARN);
+    let b = reset_button_rect();
+    let (label, tone) = if view.reset_armed {
+        ("CONFIRM", ACCENT_WARN)
+    } else {
+        ("RESET", TEXT)
+    };
+    let sub = if view.reset_armed {
+        "Tap CONFIRM to erase everything."
+    } else {
+        "Erase progress and start over."
+    };
+    let sub_px = px * 0.8;
+    text(
+        sub,
+        x,
+        b.y + b.h * 0.66,
+        fit_px(sub, b.x - u * 4.0 - x, sub_px),
+        if view.reset_armed {
+            ACCENT_WARN
+        } else {
+            TEXT_DIM
+        },
+    );
+    frame(
+        b,
+        BUTTON_BG,
+        if view.reset_armed {
+            ACCENT_WARN
+        } else {
+            BUTTON_EDGE
+        },
+        1.5,
+    );
+    text_centered(
+        label,
+        b.x + b.w * 0.5,
+        b.y + b.h * 0.68,
+        fit_px(label, b.w * 0.85, b.h * 0.5),
+        tone,
+    );
 }
 
 pub fn brightness_button_rect(plus: bool) -> Rect {
@@ -306,6 +367,7 @@ pub fn draw_settings(view: &SettingsView, assets: &Assets) {
     }
 
     draw_display_panel(view);
+    draw_reset_panel(view);
 
     draw_player_panel(view);
     draw_version_footer();
