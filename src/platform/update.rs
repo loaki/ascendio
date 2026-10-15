@@ -1,4 +1,5 @@
 //! Android launch check for a newer GitHub release; never blocks the game.
+//! Off in Play builds.
 
 use crate::platform::net::{self, Request};
 
@@ -12,8 +13,11 @@ pub struct Update {
 impl Update {
     pub fn new() -> Self {
         let stamped = option_env!("ASCENDIO_VERSION").is_some_and(|v| v.starts_with('v'));
+        // Play updates its own installs, and its policy forbids pointing
+        // players at a download from anywhere else (`make aab` sets this).
+        let play = option_env!("ASCENDIO_STORE") == Some("play");
         Self {
-            check: (cfg!(target_os = "android") && stamped)
+            check: (cfg!(target_os = "android") && stamped && !play)
                 .then(|| net::request("GET", LATEST, None)),
             page: None,
         }

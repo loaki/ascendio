@@ -4,3 +4,6 @@ FROM notfl3/cargo-apk
 RUN rustup toolchain install stable --profile minimal \
         --target aarch64-linux-android armv7-linux-androideabi \
     && rustup default stable
+# Repackages the APK as the App Bundle Play wants (scripts/aab.sh).
+RUN curl -sSLf -o /opt/bundletool.jar \
+        https://github.com/google/bundletool/releases/download/1.18.1/bundletool-all-1.18.1.jar
