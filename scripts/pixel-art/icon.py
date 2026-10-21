@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Renders the Android launcher icon (the "Ancestor" glyph) into android/res/,
-plus its white silhouette for the "genome ready" notification.
+plus its white silhouette for the "genome ready" notification and the 512px
+Google Play store icon into store/.
 
     python3 scripts/pixel-art/icon.py
 """
@@ -15,21 +16,26 @@ from render import GRID, render
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 RES = os.path.join(REPO, "android", "res")
+STORE = os.path.join(REPO, "store")
 SPRITE = "Ancestor"
 BG = (0x0E, 0x11, 0x16)  # the game's background, as in web/index.html
 # density -> px per dp, as a multiple of mdpi's 1.
 DENSITIES = {"mdpi": 1, "hdpi": 1.5, "xhdpi": 2, "xxhdpi": 3, "xxxhdpi": 4}
 
 
-def sprite():
-    rows, pal = A[SPRITE]
-    px, _ = render(SPRITE, rows, pal)
+def sprite_of(name):
+    rows, pal = A[name]
+    px, _ = render(name, rows, pal)
     img = Image.new("RGBA", (GRID, GRID))
     for y in range(GRID):
         for x in range(GRID):
             if px[y][x]:
                 img.putpixel((x, y), px[y][x] + (255,))
     return img
+
+
+def sprite():
+    return sprite_of(SPRITE)
 
 
 def silhouette(spr):
@@ -79,7 +85,9 @@ def main():
     <color name="ic_launcher_background">#{BG[0]:02X}{BG[1]:02X}{BG[2]:02X}</color>
 </resources>
 """)
-    print(f"wrote the {SPRITE} icon to {RES}")
+    # Play store icon: 512px, opaque (Play rounds the corners itself).
+    write(os.path.join(STORE, "icon-512.png"), centred(spr, 512, 20, BG + (255,)))
+    print(f"wrote the {SPRITE} icon to {RES} and {STORE}")
 
 
 def write_text(path, text):
