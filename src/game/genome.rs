@@ -220,6 +220,7 @@ fn pick(
     phy: &Phylogeny,
     pool: &[usize],
     tier: Tier,
+    climb: bool,
     planet: &Planet,
     rng: &mut Rng,
 ) -> Option<usize> {
@@ -234,7 +235,7 @@ fn pick(
         .rev()
         .copied()
         .filter(|&t| t <= tier)
-        .chain(Tier::ALL.iter().copied().filter(|&t| t > tier))
+        .chain(Tier::ALL.iter().copied().filter(|&t| climb && t > tier))
         .collect();
     for t in order {
         let bucket = at(t);
@@ -377,8 +378,11 @@ pub fn roll(
         } else {
             wants_new
         };
+        // A new species never climbs above the rolled tier (or a lone
+        // Legendary would come with any roll): the card levels up an owned
+        // animal instead, unless none can take it.
         let new = if take_new {
-            pick(phy, &fresh_reach, tier, planet, rng)
+            pick(phy, &fresh_reach, tier, owned_reach.is_empty(), planet, rng)
         } else {
             None
         };
@@ -394,11 +398,16 @@ pub fn roll(
                 }
             }
             None => {
-                let i = pick(phy, &owned_reach, tier, planet, rng).unwrap_or(Phylogeny::ROOT);
-                // A new species was due but nothing new could live here.
-                let note = (wants_new && fresh.is_empty()).then(|| {
-                    blocked_hint(phy, &seen, planet)
-                        .unwrap_or_else(|| "Nothing new could evolve here.".into())
+                let i = pick(phy, &owned_reach, tier, true, planet, rng).unwrap_or(Phylogeny::ROOT);
+                // A new species was due but nothing new could live here, or
+                // all that could is rarer than this roll.
+                let note = (wants_new && (fresh.is_empty() || take_new)).then(|| {
+                    if fresh.is_empty() {
+                        blocked_hint(phy, &seen, planet)
+                            .unwrap_or_else(|| "Nothing new could evolve here.".into())
+                    } else {
+                        "Something rarer is waiting to evolve.".into()
+                    }
                 });
                 Card {
                     taxon: i,
@@ -564,6 +573,45 @@ mod tests {
         let fresh = draw(1.0);
         assert!(fresh.iter().any(|c| c.new));
         assert!(fresh.iter().filter(|c| !c.new).all(|c| c.note.is_some()));
+    }
+
+    #[test]
+    fn a_lone_new_legendary_still_needs_a_legendary_roll() {
+        let (phy, _) = start();
+        let planets = (0..6u32.pow(5)).map(|n| {
+            let d = |k: u32| (n / 6u32.pow(k) % 6) as u8;
+            Planet {
+                land: d(0),
+                vegetation: d(1),
+                oxygen: d(2),
+                temperature: d(3),
+                volcanism: d(4),
+            }
+        });
+        // Everything owned but one Legendary (and what descends from it).
+        let (legend, found, planet) = planets
+            .flat_map(|p| {
+                (0..phy.len())
+                    .filter(|&i| phy.taxa[i].eco.tier == Tier::Legendary)
+                    .map(move |l| (l, p))
+            })
+            .find_map(|(l, p)| {
+                let found: Vec<bool> = (0..phy.len()).map(|i| !is_under(&phy, i, l)).collect();
+                (eligible(&phy, &found, &p) == [l]).then_some((l, found, p))
+            })
+            .expect("a Legendary that can be the only new species");
+        let odds = Odds {
+            cards: 1,
+            discovery: 1.0,
+            ..Odds::default()
+        };
+        let mut rng = Rng::new(3);
+        let n = 2000;
+        let hits = (0..n)
+            .filter(|_| roll(&phy, &found, &planet, &odds, &mut rng)[0].taxon == legend)
+            .count();
+        let p = tier_weights(0.0)[4] / 100.0;
+        assert!(hits > 0 && (hits as f32) < 3.0 * p * n as f32, "{hits} in {n}");
     }
 
     fn only_an_owned_rare() -> (Phylogeny, Vec<bool>, Planet) {
