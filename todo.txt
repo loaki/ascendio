@@ -1,0 +1,2 @@
+ranking species count should not count fossils
+default notification on
